@@ -21,12 +21,12 @@ async function devLoop(){
       lastm = m
       console.log("Rebuilding...")
       let res = Bun.spawnSync({
-        cmd: ["bun", "build", "src/view/main.ts", "--sourcemap=inline", "--outfile", "staticPage/index.js"],
+        cmd: ["bun", "build", "src/view/main.ts", "--sourcemap=inline", "--outfile", "index.js"],
         stdout: "pipe",
         stderr: "pipe"
       })
       if (res.exitCode != 0){
-        await writeFile("./staticPage/index.js", `
+        await writeFile("./index.js", `
           let errorMsg = ${JSON.stringify(res.stderr?.toString() || "Unknown error")}
           document.body.innerHTML = "<pre style='color:red; white-space: pre-wrap;'>" + errorMsg + "</pre>"
         `)
