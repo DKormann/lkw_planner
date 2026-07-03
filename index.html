@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+
+
+<html>
+  <title>PLANNER</title>
+
+  <script>
+    fetch("./version")
+    .then(r=>r.json())
+    .then(v=>{
+      setInterval(() => {
+        fetch("./version")
+        .then(r=>r.json())
+        .then(v2=>{if(v2 != v) location.reload()})
+      }, 200);
+    })
+    .catch(e=>{})
+  </script>
+
+  <script type="module" src="/index.js"></script>
+
+
+</html>
