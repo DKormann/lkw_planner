@@ -49,8 +49,8 @@ Bun.serve({
   async fetch(req){
     let path = req.url.split("/").filter(x=>x.length>0).slice(2)
     if (path[0] == "version") return new Response(String(devVersion))
-    if (path[0] == "index.js") return new Response(await Bun.file("./index.js").bytes(), {headers: {"Content-Type": "application/javascript"}})
-    return new Response(await Bun.file("./index.html").bytes(), {headers: {"Content-Type": "text/html"}})
+    if (path.length == 0) return new Response(await Bun.file("./index.html").bytes(), {headers: {"Content-Type": "text/html"}})
+    return new Response(await Bun.file("./index.js").bytes(), {headers: {"Content-Type": "application/javascript"}})
   }
 
 })
