@@ -1,8 +1,9 @@
-import type { ScheduleItem, UUID } from "../module";
+import { unit_const, unit_iadd, type ScheduleItem, type UUID } from "../types";
 import { getCost, optDur, optimizeSchedule, rateSchedule } from "../planner";
+import { mkWritable } from "../writeable";
 import { body, button, color, div, h2, html, p, padding, span, style, table, td, tr, width } from "./html";
 import { hightLights, requests, roadMap, schedule } from "./main";
-import { locString, transporString } from "./requestView";
+import { locString, timeString, transporterString } from "./requestView";
 
 
 function stepLogo (step: ScheduleItem['steps'][number]){
@@ -11,6 +12,28 @@ function stepLogo (step: ScheduleItem['steps'][number]){
   if (step.$ == "deliver") return '🏠'
   throw new Error("unexpected tag:", step)
 }
+
+
+
+let cursor = mkWritable({row: 1, col: 1})
+
+body.addEventListener("keydown", e=>{
+  cursor.update((cursor) =>{
+    if (cursor.col == -1) return
+    if (e.key == "ArrowLeft")         cursor.col -= 1
+    else if (e.key == "ArrowRight")   cursor.col += 1
+    else if (e.key == "ArrowUp")      cursor.row -= 1
+    else if (e.key == "ArrowDown")    cursor.row += 1
+    else if (e.key == "Escape")       cursor = {row: -1, col: -1}
+    else return
+    e.preventDefault()
+    cursor.row = Math.max(0, Math.min( schedule.get().length-1, cursor.row))
+    cursor.col = Math.max(0, Math.min( schedule.get()[cursor.row]!.steps.length-1, cursor.col))
+  })
+
+})
+
+
 
 export const scheduleView = () => {
 
@@ -29,11 +52,11 @@ export const scheduleView = () => {
 
   schedule.onupdate(sched => {
 
-    let cursor = {row: 1, col: 1}
 
-    function view(row: number, n:number){
+    cursor.onupdate(cursor=>{
 
-      console.log("VIEW")
+      let {row, col: n} = cursor
+
       let steps = sched[row]!.steps
       let step = steps[n]
       if (!step) return
@@ -57,10 +80,10 @@ export const scheduleView = () => {
       let logo = stepLogo(step)
 
       hightLights.set([
-        { points: steps.slice(n,n+2).map((p,i)=>({"location": p.val.pos})), color: "#ffc988" },
+        { points: steps.slice(n,n+2).map((p,i)=>({location: p.val.pos})), color: "#ffc988" },
         { points: [{location:step.val.pos, logo}] }
       ])
-    }
+    })
 
 
     tabview.replaceChildren(table(
@@ -68,7 +91,7 @@ export const scheduleView = () => {
       sched.map((s, rown)=>{
 
         let allPoints = s.steps.map(step=> ({ location: step.val.pos, logo: stepLogo(step) }))
-        let transport = span(transporString(s.transporter))
+        let transport = span(transporterString(s.transporter))
         transport.onmouseenter = ()=>hightLights.set([{points: allPoints, color: "#ffc988",}])
 
         stepEls.push( s.steps.map((step,i)=>{
@@ -77,8 +100,7 @@ export const scheduleView = () => {
 
           res.onclick = ()=>{
             console.log("CLICK", rown, i)
-            cursor = {row: rown, col: i}
-            view(rown, i)
+            cursor.set({row: rown, col: i})
           }
           return res
         }))
@@ -90,21 +112,6 @@ export const scheduleView = () => {
       style({ borderCollapse: "collapse", }),
     ))
 
-    body.addEventListener("keydown", e=>{
-      if (cursor.col == -1) return
-      if (e.key == "ArrowLeft") cursor.col -= 1
-      else if (e.key == "ArrowRight") cursor.col += 1
-      else if (e.key == "ArrowUp") cursor.row -= 1
-      else if (e.key == "ArrowDown") cursor.row += 1
-      else if (e.key == "Escape") cursor = {row: -1, col: -1}
-      else return
-      e.preventDefault()
-      cursor.row = Math.max(0, Math.min( sched.length-1, cursor.row))
-      cursor.col = Math.max(0, Math.min( sched[cursor.row]!.steps.length-1, cursor.col))
-      view(cursor.row, cursor.col)
-    })
-
-    view(cursor.row, cursor.col)
 
 
   })
@@ -137,8 +144,8 @@ function viewStep(row: number, n: number, parent: HTMLElement){
   let step = steps.steps[n]
   if (!step) return
 
-  let totalDist = 0
-  let dist = 0
+  let totalDist = unit_const(0, "seconds")
+  let dist = unit_const(0,"seconds")
 
   let decks = [[],[]] as [UUID[], UUID[]]
 
@@ -149,8 +156,8 @@ function viewStep(row: number, n: number, parent: HTMLElement){
       if (step.$ == "deliver") decks = decks.map(d=>d.filter(r=>r != step.val.request)) as [UUID[], UUID[]]
     }
 
-    totalDist += getCost(steps.steps[i-1]!.val.pos, steps.steps[i]!.val.pos)
-    if (i == n) dist = totalDist
+    unit_iadd(totalDist, getCost(steps.steps[i-1]!.val.pos, steps.steps[i]!.val.pos))
+    if (i == n) dist.value = totalDist.value
   }
 
 
@@ -169,7 +176,6 @@ function viewStep(row: number, n: number, parent: HTMLElement){
   visual.appendChild(transporter)
 
 
-  console.log("decks\n"+ decks.map(d=>d.map(r=>"<>").join(" ")).join("\n"))
 
   decks.forEach((deck, i)=>{
     deck.forEach((req, j)=>{
@@ -203,8 +209,8 @@ function viewStep(row: number, n: number, parent: HTMLElement){
     visual.appendChild(tire)
   }
   let res = div(
-    h2(transporString(steps.transporter)),
-    p(`distance: ${dist.toFixed(2)} / ${totalDist.toFixed(2)}`),
+    h2(transporterString(steps.transporter)),
+    p(`distance: ${timeString(dist)} / ${timeString(totalDist)}`),
     style({
       border: "1px solid var(--gray)",
       margin: "0",

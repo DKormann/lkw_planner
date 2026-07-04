@@ -2,11 +2,13 @@ import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
 import { randomMap } from "../randomMap";
-import { randomUUID, Request, Schedule, UUID } from "../module";
+import { Location, randomUUID, Request, Schedule, unit_const, UUID } from "../types";
 import { requestView } from "./requestView";
 import { scheduleView } from "./scheduleView";
 import { mkWritable } from "../writeable";
 import { optimizeSchedule } from "../planner";
+import { randChoice, random, setRandSeed } from "../random";
+
 
 body.style.margin = "0"
 
@@ -29,38 +31,33 @@ let page = div(
 body.replaceChildren(page)
 
 
-export function randChoice<T>(arr:T[]):T{
-  return arr[Math.floor(Math.random()*arr.length)]!
-}
+setRandSeed(24)
 
-export let roadMap = randomMap(1)
 
-export function getPoint(id: UUID){
-  let point = roadMap.points.get(id)
-  if (!point) throw new Error(`Point ${id} not found`)
-  return point
-}
+export let roadMap = randomMap()
 
 export let requests: Request[] = Array.from({length:20}, (_,i)=>({
   id: randomUUID(),
-  startPoint: randChoice(Array.from(roadMap.points.keys())),
-  endPoint: randChoice(Array.from(roadMap.points.keys())),
-  value: Math.floor(Math.random()*100),
-  deadline: Date.now() + Math.floor(Math.random()*30) * 24 * 60 * 60 * 1000,
+  startPoint: randChoice(roadMap.points),
+  endPoint: randChoice(roadMap.points),
+  value: unit_const(Math.floor(random()*1000), "eur"),
+  deadline: unit_const(Math.floor(random()*60*60*24*7), "seconds"),
 }))
 
 
 export let schedule = mkWritable<Schedule> (Array.from({length: 3}, (_,i)=>({
   transporter: randomUUID(),
-  steps: [{$:"start", val: {pos: randChoice(roadMap.points.values().toArray().map(x=>x.id))}}]
+  steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
 })))
 
 
-schedule.update(x=>optimizeSchedule(requests,x))
+
+schedule.update(sched=>optimizeSchedule(requests, sched))
+
 
 export type HighLight = {
   points: {
-    location: UUID,
+    location: Location,
     logo? : string,
   }[],
   color?: string
@@ -109,4 +106,4 @@ function mkWindow (tab: number = 0 ) {
   return el
 }
 
-contentSpace.replaceChildren(mkWindow(2), mkWindow())
+contentSpace.replaceChildren(mkWindow(2 ), mkWindow())

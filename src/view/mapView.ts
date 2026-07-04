@@ -1,9 +1,9 @@
 
-import type { UUID } from "../module";
+import type { Location, UUID } from "../types";
 import { findPath, pairId } from "../planner";
 import {  type RoadMap } from "../randomMap";
 import { div, p, style } from "./html";
-import { getPoint, hightLights, requests, type HighLight } from "./main";
+import { hightLights, requests, type HighLight } from "./main";
 
 
 function mkSvg (tag: "circle", x: number, y: number) : {el: SVGCircleElement, setColor: (color: string)=>void}
@@ -48,12 +48,7 @@ function mkSvg (tag: "circle" | "line" | "text", x1: number, y1: number, x2?: nu
     el.textContent = String(x2)
     el.setAttribute("font-size", "0.03")
     el.setAttribute("fill", "gray")
-    return {
-      el,
-      setColor: (color: string)=>{
-        el.setAttribute("fill", color)
-      }
-    }
+    return { el, setColor: (color: string)=>{ el.setAttribute("fill", color) } }
   }
   throw new Error("Invalid tag")
 }
@@ -74,19 +69,19 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
   
   for (let [id1, roads] of roadmap.roads){
     for (let [id2, dist] of roads){
-      let a = getPoint(id1)!
-      let b = getPoint(id2)!
-      let line = mkSvg("line", a.location.x, a.location.y, b.location.x, b.location.y).el
-      let id = pairId(a.id, b.id)
+      let a = roadmap.geolocation( id1)!
+      let b = roadmap.geolocation( id2)!
+      let line = mkSvg("line", a.x, a.y, b.x, b.y).el
+      let id = pairId(id1, id2)
       elements.set(id, line)
       sources.set(line, id)
       element.appendChild(line)
     }
   }
   
-  for (let point of roadmap.points.values()){
-
-    let circle = mkSvg("circle", point.location.x, point.location.y).el
+  for (let point of roadmap.roads.keys()){
+    let loc = roadmap.geolocation(point)
+    let circle = mkSvg("circle", loc.x, loc.y).el
     elements.set(point, circle)
     sources.set(circle, point)
     element.appendChild(circle)
@@ -97,36 +92,34 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
   hightLights.onupdate((nH,o)=>{
     hints.forEach(el=>el.remove())
     for (let n of nH){
-      let last : UUID | null = null
+      let last : Location | null = null
       for (let p of n.points){
         let next = p.location
         if (last){
-          let path = findPath(last, next).path.map(l=>l.location)
+          let path = findPath(last, next).path
           for (let i = 0; i < path.length - 1; i++){
-            let line = mkSvg("line", path[i]!.x, path[i]!.y, path[i+1]!.x, path[i+1]!.y)
+            let A = roadmap.geolocation(path[i]!)!
+            let B = roadmap.geolocation(path[i+1]!)!
+            let line = mkSvg("line", A.x, A.y, B.x, B.y)
             line.setColor(n.color ?? "#ffc988")
             line.el.setAttribute("stroke-width", "0.01")
             line.el.setAttribute("z-index", "100")
             element.appendChild(line.el)
             hints.push({remove: ()=>line.el.remove()})
           }
-
         }
         last = next
       }
 
       for (let p of n.points){
-        let pos = getPoint(p.location).location
         if (p.logo) {
+          let pos = roadmap.geolocation(p.location)
           let el = mkSvg("text", pos.x, pos.y, p.logo)
           el.el.setAttribute("z-index", "1000")
           element.appendChild(el.el)
           hints.push(el.el)
-
         }
-
       }
-
     }
   })
 

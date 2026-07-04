@@ -1,17 +1,28 @@
-import { Request, UUID, type Schedule } from "../module";
+import { Location, Price, Request, Time, UUID, type Schedule } from "../types";
 import { findPath } from "../planner";
 import type { RoadMap } from "../randomMap";
+import type { Infer } from "../schema";
 import { border, color, h3, html, padding, span, style, table, td, tr, type HTMLGenerator } from "./html";
 import { hightLights, requests, roadMap, schedule } from "./main";
 
 
-export function locString (id: UUID) {
-  return `📍 ${roadMap.points.get(id)?.rep??"UNK"}`
+export function locString (loc: Infer<typeof Location>) {
+  return `📍 ${roadMap.geoCode(loc) ?? "UNK"}`
 }
 
-export function transporString (id: UUID) {
-  return `🚛 ${schedule.get().findIndex(s=>s.transporter == id).toString().padStart(4, '0')}`
+export function transporterString (tran: UUID) {
+  return `🚛 ${schedule.get().findIndex(s=>s.transporter == tran).toString().padStart(4, '0')}`
 }
+
+export function timeString (time: Time){
+  return `${((time.value/60 / 60).toFixed(0))} h`
+}
+
+export function priceString (price: Price){
+  return `${price.value.toFixed(2)} €`
+}
+
+
 
 
 
@@ -27,6 +38,7 @@ export function requestView (requests: Request[], schedule: Schedule): HTMLEleme
     border: "1px solid var(--gray)",
     padding: ".3em .5em",
     cursor:"pointer",
+    whiteSpace: "nowrap",
   }), ...x)) as HTMLGenerator<HTMLTableCellElement> 
 
   return table(
@@ -36,14 +48,14 @@ export function requestView (requests: Request[], schedule: Schedule): HTMLEleme
     requests.map((r, i)=>{
 
       let path = findPath(r.startPoint, r.endPoint)
-      let date = new Date(r.deadline)
+
       let row= tr(
         cell(requestString(r.id)),
         cell(locString(r.startPoint)),
         cell(locString(r.endPoint)),
-        cell(span(path.cost.toFixed(2), style({float: "right"}))),
-        cell(span(r.value.toString() + "€", style({float: "right"}))),
-        cell(date.getDate().toString().padStart(2, "0") + "." + (date.getMonth()+1).toString().padStart(2, "0") + "." + date.getFullYear()),
+        cell(span( timeString(path.dist), style({float: "right"}))),
+        cell(span(priceString(r.value), style({float: "right"}))),
+        cell(span(timeString(r.deadline), style({float: "right"}))),
       )
       row.onmouseenter = ()=>{
         row.style.backgroundColor = color.gray,

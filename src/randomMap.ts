@@ -1,60 +1,49 @@
-import type { Infer } from "./schema";
-import { Location, randomUUID, UUID } from "./module";
+
+import { Location, randomUUID, Time, unit_const, UUID } from "./types";
+import { randChoice, random } from "./random";
 
 
 
+export function randomMap (){
 
+  let points :Location[] = []
 
-
-
-
-export function randomMap ( seed: number = 2){
-
-  function random(){
-    let x = Math.sin(seed++) * 10000;
-    return x - Math.floor(x);
-  }
-
-  seed = random() * 10000
-
-  let points = new Map<UUID, Location>()
-  let roads = new Map<UUID, Map<UUID, {dist: number}>> ()
-
-  function pureDistance (a: Location, b: Location){
-    return Math.hypot(a.location.x - b.location.x, a.location.y - b.location.y)
-  }
+  let roads = new Map<Location, Map<Location, Time>> ()
+  let geolocation = new Map<Location, {x: number, y: number}>()
+  let geocodes = new Map<Location, string>()
 
   for (let i = 0; i < 100; i++){
 
-
-    let id = randomUUID()
-    points.set(id, {
-      id,
-      rep: "DE " + i.toString().padStart(5, "0"),
-      location: {x: random(), y: random()}
-    }
-  )}
-
-
-  points.values().forEach(p=>{
-    roads.set(p.id, new Map())
-  })
-
-  for (let p of points.values()){
-
-    let nearest = points.values().toArray().sort((a,b)=> pureDistance(p,a) - pureDistance(p,b)).slice(1,1+3)
-    for (let n of nearest){
-      let dist = pureDistance(p,n)
-      roads.get(p.id)!.set(n.id, {dist})
-      roads.get(n.id)!.set(p.id, {dist})
-    }
+    let point: Location = `loc${randomUUID()}`
+    points.push(point)
+    geolocation.set(point , {x: random(), y: random()})
+    geocodes.set(point, `DE ${geolocation.size.toString().padStart(4, "0")}`)
+    roads.set(point, new Map())
   }
 
+  for (let [ID, p] of geolocation.entries()){
+    geolocation.entries().toArray().sort(([a,A],[b,B])=> Math.hypot(A.x - p.x, A.y - p.y) - Math.hypot(B.x - p.x, B.y - p.y))
+    .slice(1,4).forEach(([id, loc])=>{
+      let dist = unit_const(Math.hypot(loc.x - p.x, loc.y - p.y) * 10 * 60 * 60, "seconds")
+      roads.get(ID)!.set(id, dist)
+      roads.get(id)!.set(ID, dist)
+    })
+  }
 
   return {
-    points,
     roads,
-  }
+    points,
+    geolocation(loc: Location){
+      let geo = geolocation.get(loc)
+      if (!geo) throw new Error(`Location ${loc} not found`)
+      return geo
+    },
+    geoCode(loc: Location){
+        let code = geocodes.get(loc)
+        if (!code) throw new Error(`Location ${loc} not found`)
+        return code
+      }
+    }
 }
 
 
