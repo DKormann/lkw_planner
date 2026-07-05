@@ -1,4 +1,4 @@
-import { uconst, iadd, type ScheduleItem, type UUID, ScheduleStep, Time, add } from "../types";
+import { uconst, iadd, type ScheduleItem, type UUID, ScheduleStep, Time, add, Request } from "../types";
 import { getCost, optDur, optimizeSchedule, rateSchedule } from "../planner";
 import { mkWritable } from "../writeable";
 import { background, body, borderRadius, button, color, div, h2, html, p, padding, span, style, table, td, tr, width } from "./html";
@@ -69,10 +69,13 @@ export const scheduleView = () => {
 
   let times : Time[][] = []
 
+  let decks : [Request[], Request[]] [] []  = []
+
   
   schedule.onupdate(sched => {
 
-    times = sched.map(s=>[uconst(0, "seconds")])
+    times = sched.map(s=> [uconst(0, "seconds")])
+    decks = sched.map(s=> [[[], []]])
 
 
     cursor.onupdate(cursor=>{
@@ -87,12 +90,15 @@ export const scheduleView = () => {
 
       stepEls.forEach((rowEls, rown)=>{
         rowEls.forEach((el,i)=>{
+
+
+
           let step = sched[rown]!.steps[i]
           if (!step) return
           let border = color.background
           if (i == n && row == rown) {
             border = color.blue 
-            viewStep(row, n, stepview, times[row]![n]!, times[row]![times[row]!.length-1]!)
+            viewStep(row, n, stepview, times[row]![n]!, times[row]![times[row]!.length-1]!, decks[row]![n]!)
           }
           else if (step.$ != "start" && step.val.request == request) border = color.gray
           el.style.borderColor = border
@@ -123,6 +129,16 @@ export const scheduleView = () => {
             let prev = s.steps[i-1]!
             let dist = getCost(prev.val.pos, step.val.pos)
             times[rown]!.push(add(times[rown]![i-1]!, dist))
+
+
+
+            console.log("DECK", rown, i, decks[rown]![i-1]!)
+            let deck = [...decks[rown]![i-1]!] as [Request[], Request[]]
+
+            if (step.$ == "pickup") deck[step.val.deck]! = [...deck[step.val.deck]!, getRequest(step.val.request)]
+            else if (step.$ == "deliver") deck = deck.map((d, j)=> d.filter(r=>r.id != step.val.request) ) as [Request[], Request[]]
+            decks[rown]!.push(deck)
+
           }
 
           let time = times[rown]![i]!
@@ -193,13 +209,13 @@ export const scheduleView = () => {
 
 
 
-function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total: Time){
+function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total: Time, decks: [Request[], Request[]]){
   let steps = schedule.get()[row]
   if (!steps) return
   let step = steps.steps[n]
   if (!step) return
 
-  let decks = [[],[]] as [UUID[], UUID[]]
+  // let decks = [[],[]] as [UUID[], UUID[]]
 
   let visual = document.createElementNS("http://www.w3.org/2000/svg", "svg")
   visual.setAttribute("width", "100%")
@@ -229,9 +245,9 @@ function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total
       text.setAttribute("y", (0.27 - 0.2 * i + 0.05).toString())
       text.setAttribute("text-anchor", "middle")
       text.setAttribute("dominant-baseline", "middle")
-      text.setAttribute("font-size", ".06")
+      text.setAttribute("font-size", ".04")
       text.setAttribute("fill", color.color)
-      text.textContent = `${requests.findIndex(r=>r.id == req).toString().padStart(4, '0')}`
+      text.textContent = `${requestString(req.id)}`
       visual.appendChild(text)
       
     })

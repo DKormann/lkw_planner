@@ -10,6 +10,9 @@ import { configurePlanner, optimizeSchedule } from "../planner";
 import { randChoice, random, setRandSeed } from "../random";
 
 
+const LKW_COUNT = 3;
+const REQUEST_COUNT = 20;
+
 body.style.margin = "0"
 
 let header = h1("route planner", style({background: color.blue, color: color.background, margin: "0", padding: ".6em"}))
@@ -36,7 +39,7 @@ setRandSeed(25)
 
 export let roadMap = randomMap()
 
-export let requests: Request[] = Array.from({length:20}, (_,i)=>({
+export let requests: Request[] = Array.from({length:REQUEST_COUNT}, (_,i)=>({
   id: randomUUID(),
   startPoint: randChoice(roadMap.points),
   endPoint: randChoice(roadMap.points),
@@ -45,7 +48,7 @@ export let requests: Request[] = Array.from({length:20}, (_,i)=>({
 }))
 
 
-export let schedule = mkWritable<Schedule> (Array.from({length: 3}, (_,i)=>({
+export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT}, (_,i)=>({
   transporter: randomUUID(),
   steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
 })))
