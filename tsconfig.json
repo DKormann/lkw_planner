@@ -19,6 +19,8 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": [
+    "cli/**/*.ts",
+    "cli/**/*.d.ts",
     "types/**/*.d.ts",
     "src/**/*.ts",
     "src/**/*.d.ts",

@@ -6,7 +6,7 @@ import { Location, randomUUID, Request, Schedule, uconst, UUID } from "../types"
 import { requestView } from "./requestView";
 import { scheduleView } from "./scheduleView";
 import { mkWritable } from "../writeable";
-import { optimizeSchedule } from "../planner";
+import { configurePlanner, optimizeSchedule } from "../planner";
 import { randChoice, random, setRandSeed } from "../random";
 
 
@@ -50,7 +50,7 @@ export let schedule = mkWritable<Schedule> (Array.from({length: 3}, (_,i)=>({
   steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
 })))
 
-
+configurePlanner({ requests, roadMap })
 
 schedule.update(sched=>optimizeSchedule(requests, sched))
 
