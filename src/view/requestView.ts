@@ -15,22 +15,21 @@ export function transporterString (tran: UUID) {
 }
 
 export function timeString (time: Time){
-  return `${((time.value/60 / 60).toFixed(0))} h`
+  // return `${((time.value/60/60).toFixed(2))} h`
+  return `${Math.floor(time.value/60/60).toString().padStart(2, '0')}:${Math.floor((time.value/60)%60).toString().padStart(2, '0')}h`
 }
 
 export function priceString (price: Price){
-  return `${price.value.toFixed(2)} €`
+  return `${price.value.toFixed(0)} €`
 }
-
-
-
-
 
 export function requestString (id: UUID) {
   let req = requests.find(r=>r.id == id)
   if (!req) return "UNK"
   return `📦 ${requests.findIndex(x=>x.id == id).toString().padStart(4, '0')}`
 }
+
+
 
 export function requestView (requests: Request[], schedule: Schedule): HTMLElement{
 

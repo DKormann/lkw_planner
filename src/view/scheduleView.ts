@@ -1,19 +1,35 @@
-import { unit_const, unit_iadd, type ScheduleItem, type UUID } from "../types";
+import { uconst, iadd, type ScheduleItem, type UUID, ScheduleStep, Time, add } from "../types";
 import { getCost, optDur, optimizeSchedule, rateSchedule } from "../planner";
 import { mkWritable } from "../writeable";
-import { body, button, color, div, h2, html, p, padding, span, style, table, td, tr, width } from "./html";
+import { background, body, borderRadius, button, color, div, h2, html, p, padding, span, style, table, td, tr, width } from "./html";
 import { hightLights, requests, roadMap, schedule } from "./main";
-import { locString, timeString, transporterString } from "./requestView";
+import { locString, priceString, requestString, timeString, transporterString } from "./requestView";
 
 
-function stepLogo (step: ScheduleItem['steps'][number]){
+function stepLogo (step: ScheduleStep){
   if (step.$ == "start") return '🚛'
   if (step.$ == "pickup") return '📦'
   if (step.$ == "deliver") return '🏠'
   throw new Error("unexpected tag:", step)
 }
 
+export function getRequest(id: UUID){
+  let req = requests.find(r=>r.id == id)
+  if (!req) throw new Error(`not found request ${id}`)
+  return req
+}
 
+export function stepRequest(step: ScheduleStep){
+  if (step.$ == "start") return undefined
+  return getRequest(step.val.request)
+}
+
+function stepString (step: ScheduleStep){
+
+  if (step.$ == "start") return `start`
+  let req = getRequest(step.val.request)
+  return `${step.$} ${requestString(step.val.request)}: ${priceString(req.value)} deadline ${timeString(req.deadline)}`
+}
 
 let cursor = mkWritable({row: 1, col: 1})
 
@@ -45,12 +61,18 @@ export const scheduleView = () => {
     whiteSpace: "nowrap",
   }), ...x)) as typeof td;
 
-  let tabview = div()
-  let stepview = div()
+  const tabview = div()
+  const rejectView = div()
+  const stepview = div()
   let stepEls = [] as HTMLSpanElement[][]
   let rowEls = [] as HTMLTableRowElement[]
 
+  let times : Time[][] = []
+
+  
   schedule.onupdate(sched => {
+
+    times = sched.map(s=>[uconst(0, "seconds")])
 
 
     cursor.onupdate(cursor=>{
@@ -67,13 +89,13 @@ export const scheduleView = () => {
         rowEls.forEach((el,i)=>{
           let step = sched[rown]!.steps[i]
           if (!step) return
-          let background = ''
+          let border = color.background
           if (i == n && row == rown) {
-            background = color.green  
-            viewStep(row, n, stepview)
+            border = color.blue 
+            viewStep(row, n, stepview, times[row]![n]!, times[row]![times[row]!.length-1]!)
           }
-          else if (step.$ != "start" && step.val.request == request) background = color.gray
-          el.style.background = background
+          else if (step.$ != "start" && step.val.request == request) border = color.gray
+          el.style.borderColor = border
         })
       })
 
@@ -86,6 +108,8 @@ export const scheduleView = () => {
     })
 
 
+
+
     tabview.replaceChildren(table(
       ["transporter", "steps"].map(h=> cell(h), ), style({fontWeight: "bold"}),
       sched.map((s, rown)=>{
@@ -95,8 +119,23 @@ export const scheduleView = () => {
         transport.onmouseenter = ()=>hightLights.set([{points: allPoints, color: "#ffc988",}])
 
         stepEls.push( s.steps.map((step,i)=>{
+          if (i>0){
+            let prev = s.steps[i-1]!
+            let dist = getCost(prev.val.pos, step.val.pos)
+            times[rown]!.push(add(times[rown]![i-1]!, dist))
+          }
+
+          let time = times[rown]![i]!
+
+          let req = stepRequest(step)
+
           let logo = stepLogo(step)
-          let res = span(logo, style({padding: ".3em .3em",}))
+          let res = span(logo, style({padding: ".1em .1em",
+            background:req && req.deadline.value < time.value ? color.red : "",
+            border: "0.2em solid " + color.background,
+            borderRadius: "0.3em",
+            
+          }))
 
           res.onclick = ()=>{
             console.log("CLICK", rown, i)
@@ -110,10 +149,25 @@ export const scheduleView = () => {
         return row
       }),
       style({ borderCollapse: "collapse", }),
-    ))
+    ));
+    let rejects = requests.filter(r=>!sched.flatMap(s=>s.steps).some(step=>step.$ != "start" && step.val.request == r.id))
 
+    rejectView.replaceChildren(
 
-
+      rejects.length == 0 ? span() : div(
+        div(
+          p("open requests", style({fontWeight: "bold", padding: ".3em", margin: ".3em"})),
+          rejects.map(r=>span(requestString(r.id), style({padding: ".3em", margin: ".3em", whiteSpace: "nowrap"}))),
+          style({
+            display: "row",
+            flexDirection: "column",
+            padding: ".5em",
+            marginTop: ".5em",
+            border: "1px solid "+color.gray,
+          })
+        )
+      )
+    )
   })
 
   let value = span()
@@ -129,6 +183,7 @@ export const scheduleView = () => {
       padding: ".5em",
     }),
     tabview,
+    rejectView,
     p("Value: ", value),
     p("search time:", optDur),
     stepview,
@@ -138,29 +193,13 @@ export const scheduleView = () => {
 
 
 
-function viewStep(row: number, n: number, parent: HTMLElement){
+function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total: Time){
   let steps = schedule.get()[row]
   if (!steps) return
   let step = steps.steps[n]
   if (!step) return
 
-  let totalDist = unit_const(0, "seconds")
-  let dist = unit_const(0,"seconds")
-
   let decks = [[],[]] as [UUID[], UUID[]]
-
-  for (let i = 1; i < steps.steps.length; i++){
-    if (i <= n) {
-      let step = steps.steps[i]!
-      if (step.$ == "pickup") decks[step.val.deck].push(step.val.request)
-      if (step.$ == "deliver") decks = decks.map(d=>d.filter(r=>r != step.val.request)) as [UUID[], UUID[]]
-    }
-
-    unit_iadd(totalDist, getCost(steps.steps[i-1]!.val.pos, steps.steps[i]!.val.pos))
-    if (i == n) dist.value = totalDist.value
-  }
-
-
 
   let visual = document.createElementNS("http://www.w3.org/2000/svg", "svg")
   visual.setAttribute("width", "100%")
@@ -174,8 +213,6 @@ function viewStep(row: number, n: number, parent: HTMLElement){
   transporter.setAttribute("fill", color.blue)
 
   visual.appendChild(transporter)
-
-
 
   decks.forEach((deck, i)=>{
     deck.forEach((req, j)=>{
@@ -208,9 +245,15 @@ function viewStep(row: number, n: number, parent: HTMLElement){
     tire.setAttribute("fill", color.blue)
     visual.appendChild(tire)
   }
+
+
+
+  let dead = step.$ != "start" && getRequest(step.val.request).deadline.value < dist.value
+
   let res = div(
     h2(transporterString(steps.transporter)),
-    p(`distance: ${timeString(dist)} / ${timeString(totalDist)}`),
+    p(`${timeString(dist)} / ${timeString(total)}`),
+    p(stepString(step), style({color: dead ? color.red : color.color})),
     style({
       border: "1px solid var(--gray)",
       margin: "0",

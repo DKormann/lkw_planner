@@ -1,5 +1,5 @@
 
-import { Location, randomUUID, Time, unit_const, UUID } from "./types";
+import { Location, randomUUID, Time, uconst, UUID } from "./types";
 import { randChoice, random } from "./random";
 
 
@@ -24,7 +24,7 @@ export function randomMap (){
   for (let [ID, p] of geolocation.entries()){
     geolocation.entries().toArray().sort(([a,A],[b,B])=> Math.hypot(A.x - p.x, A.y - p.y) - Math.hypot(B.x - p.x, B.y - p.y))
     .slice(1,4).forEach(([id, loc])=>{
-      let dist = unit_const(Math.hypot(loc.x - p.x, loc.y - p.y) * 10 * 60 * 60, "seconds")
+      let dist = uconst(Math.hypot(loc.x - p.x, loc.y - p.y) * 10 * 60 * 60, "seconds")
       roads.get(ID)!.set(id, dist)
       roads.get(id)!.set(ID, dist)
     })

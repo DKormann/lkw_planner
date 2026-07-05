@@ -1,3 +1,4 @@
+import { constant, number, string } from "../schema"
 
 type Person = {
   name: string,
@@ -15,6 +16,8 @@ let peter : Person = {
 }
 
 
+
+
 function getage(p: Person){
   return p.age
 }
@@ -24,12 +27,27 @@ function make_pair <T> (a:T) : [T, T] {
   return [a, a]
 }
 
-
 make_pair(1)
-
-
-
 make_pair("hello")
+
+
+
+const tables = {
+
+  persons: {
+    name: string
+  },
+
+  jobs: {
+    income: number,
+    grade:  constant("A")
+  }
+
+}
+
+type Tables = typeof tables
+
+type JOB = Tables [ 'jobs']
 
 
 

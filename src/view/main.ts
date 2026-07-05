@@ -2,7 +2,7 @@ import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
 import { randomMap } from "../randomMap";
-import { Location, randomUUID, Request, Schedule, unit_const, UUID } from "../types";
+import { Location, randomUUID, Request, Schedule, uconst, UUID } from "../types";
 import { requestView } from "./requestView";
 import { scheduleView } from "./scheduleView";
 import { mkWritable } from "../writeable";
@@ -31,7 +31,7 @@ let page = div(
 body.replaceChildren(page)
 
 
-setRandSeed(24)
+setRandSeed(25)
 
 
 export let roadMap = randomMap()
@@ -40,8 +40,8 @@ export let requests: Request[] = Array.from({length:20}, (_,i)=>({
   id: randomUUID(),
   startPoint: randChoice(roadMap.points),
   endPoint: randChoice(roadMap.points),
-  value: unit_const(Math.floor(random()*1000), "eur"),
-  deadline: unit_const(Math.floor(random()*60*60*24*7), "seconds"),
+  value: uconst(Math.floor(random()*1000), "eur"),
+  deadline: uconst(Math.floor(random()*60*60*24*7), "seconds"),
 }))
 
 

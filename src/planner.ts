@@ -1,13 +1,13 @@
-import { Time, unit_add, unit_const, unit_iadd, type Location, type Request, type Schedule, type ScheduleItem, type UUID } from "./types";
+import { Time, add, uconst, iadd, type Location, type Request, type Schedule, type ScheduleItem, type UUID, isub, mul } from "./types";
 import { requests, roadMap } from "./view/main";
 import { randChoice, random } from "./random";
 
 
 const DECKCAPACITY = 3
-const UNLOADCOST = unit_const(10, "eur")
-const PICKUPCOST = unit_const(5, "eur")
-const DIST_COST_EUR_PER_H = 20
-const DIST_COST = DIST_COST_EUR_PER_H / 3600
+const UNLOADCOST = uconst(10, "eur")
+const PICKUPCOST = uconst(5, "eur")
+const COST_PER_H = 50
+const COST_PER_SECOND = COST_PER_H / 3600
 
 
 export function pairId(a: string, b: string): string{
@@ -20,7 +20,7 @@ export function findPath(start: Location, end: Location): {path: Location[], dis
 
 
   let visited = new Map<Location, {dist: Time, path: Location[]}>()
-  visited.set(start, {dist: unit_const(0, "seconds"), path: [start]})
+  visited.set(start, {dist: uconst(0, "seconds"), path: [start]})
   let queue = [start]
 
   while (queue.length > 0){
@@ -28,7 +28,7 @@ export function findPath(start: Location, end: Location): {path: Location[], dis
     if (current == end){ break}
   
     for (let [next, dist] of roadMap.roads.get(current) ?? []){
-      let cost = unit_add(visited.get(current)!.dist, dist)
+      let cost = add(visited.get(current)!.dist, dist)
       if (!visited.has(next) || cost < visited.get(next)!.dist){
         visited.set(next, {dist: cost, path: [...visited.get(current)!.path, next]})
         queue.push(next)
@@ -52,9 +52,9 @@ export function getCost(start: Location, end: Location): Time{
 }
 
 export function getCostN(...points: Location[]): Time{
-  let cost = unit_const(0, "seconds")
+  let cost = uconst(0, "seconds")
   for (let i = 0; i < points.length - 1; i++){
-    unit_iadd(cost, getCost(points[i]!, points[i+1]!))
+    iadd(cost, getCost(points[i]!, points[i+1]!))
   }
   return cost
 }
@@ -73,11 +73,22 @@ export function optimizeSchedule(requests: Request[], schedule: Schedule):Schedu
       if (random() < 0.1){
         if (random() < 0.5){
           if (free_requests.length > 1){
-            let req = free_requests.pop()!
-            schedItem.steps.push(
+            let req = free_requests.shift()!
+
+            let oldsteps = schedItem.steps
+            let itemrating = rateSchedule([schedItem])
+
+            schedItem.steps = [...oldsteps,
               {$:"pickup", val: { request: req.id, pos: randChoice(roadMap.points), deck: random() > .5 ? 1 : 0}},
               {$:"deliver", val: { request: req.id, pos: randChoice(roadMap.points)}},
-            )
+            ]
+
+            let newrating = rateSchedule([schedItem])
+
+            if (newrating < itemrating){
+              schedItem.steps = oldsteps
+              free_requests.push(req)
+            }
             continue
           }
         }else{
@@ -88,9 +99,11 @@ export function optimizeSchedule(requests: Request[], schedule: Schedule):Schedu
             let oldsteps = schedItem.steps
             schedItem.steps = oldsteps.filter(x=>(x.$ == "start" || (x.val.request != req)))
             let newrating = rateSchedule([schedItem])
-            if (newrating < itemrating) schedItem.steps = oldsteps
+            if (newrating < itemrating) {
+              schedItem.steps = oldsteps
+            }
+            else console.log("removed request ", req, " from schedule")
             continue
-
           }
         }
       }
@@ -116,7 +129,11 @@ export function optimizeSchedule(requests: Request[], schedule: Schedule):Schedu
 
   let st = Date.now()
 
-  for (let i = 0; i< 1000; i++){
+  for (let i = 0; i< 2000; i++){
+
+    if (i == 0 || (i+1) % 1000 == 0){
+      console.log("opt step: ", i+1)
+    }
     permute(schedule)
   }
 
@@ -128,17 +145,14 @@ export function optimizeSchedule(requests: Request[], schedule: Schedule):Schedu
 function randint (n:number){ return Math.floor(random()*n)}
 
 function swap<T> (s:T[], a: number, b:number){
-  let t= s[a]!
+  let t= s[a]!;
   s[a] = s[b]!;
   s[b] = t
 }
 
-
-
-
 export function rateSchedule(schedule: Schedule) : number {
-  let res = unit_const(0, "eur")
-  let dist = unit_const(0,  "seconds")
+  let res = uconst(0, "eur")
+  let duration = uconst(0,  "seconds")
 
   let decks: [UUID[], UUID[]]
   for (let item of schedule){
@@ -150,8 +164,8 @@ export function rateSchedule(schedule: Schedule) : number {
       if (idx == -1) return false
       let after = decks[deck].slice(idx+1)
       decks[deck] = decks[deck].slice(0, idx).concat(after)
-      res.value -= UNLOADCOST.value
-      res.value -= after.length * (UNLOADCOST.value + PICKUPCOST.value)
+      isub(res, UNLOADCOST)
+      isub(res, mul(add(UNLOADCOST, PICKUPCOST), after.length))
       return true
     }
 
@@ -160,22 +174,22 @@ export function rateSchedule(schedule: Schedule) : number {
       if (step.$ == "pickup") {
         decks[step.val.deck].push(step.val.request)
         if (decks[step.val.deck].length > DECKCAPACITY) return - Infinity
-      }
-      else if (step.$ == "deliver") {
+      } else if (step.$ == "deliver") {
 
         let reqid = step.val.request
         let req = requests.find(x=>reqid == x.id)
+
         if (!req) throw new Error("not found request: "+step.val.request)
-        if (!decks.flat().includes(reqid)) return - Infinity
         if (!unload(reqid, 0) && !unload(reqid, 1)) return - Infinity
-        unit_iadd(res, req.value)
+
+        if (duration.value < req.deadline.value) iadd(res, req.value)
 
       }
       else return - Infinity
     };
     
-    unit_iadd(dist, getCostN(...item.steps.map(x=>x.val.pos)))
+    iadd(duration, getCostN(...item.steps.map(x=>x.val.pos)))
   }
 
-  return res.value - dist.value * DIST_COST   
+  return res.value - duration.value * COST_PER_SECOND   
 }
