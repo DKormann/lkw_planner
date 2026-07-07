@@ -91,8 +91,6 @@ export const scheduleView = () => {
       stepEls.forEach((rowEls, rown)=>{
         rowEls.forEach((el,i)=>{
 
-
-
           let step = sched[rown]!.steps[i]
           if (!step) return
           let border = color.background
@@ -111,7 +109,7 @@ export const scheduleView = () => {
         { points: steps.slice(n,n+2).map((p,i)=>({location: p.val.pos})), color: "#ffc988" },
         { points: [{location:step.val.pos, logo}] }
       ])
-    })
+    }, true)
 
 
 
@@ -130,9 +128,7 @@ export const scheduleView = () => {
             let dist = getCost(prev.val.pos, step.val.pos)
             times[rown]!.push(add(times[rown]![i-1]!, dist))
 
-
-
-            console.log("DECK", rown, i, decks[rown]![i-1]!)
+            // console.log("DECK", rown, i, decks[rown]![i-1]!)
             let deck = [...decks[rown]![i-1]!] as [Request[], Request[]]
 
             if (step.$ == "pickup") deck[step.val.deck]! = [...deck[step.val.deck]!, getRequest(step.val.request)]

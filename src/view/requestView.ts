@@ -2,7 +2,7 @@ import { Location, Price, Request, Time, UUID, type Schedule } from "../types";
 import { findPath } from "../planner";
 import type { RoadMap } from "../randomMap";
 import type { Infer } from "../schema";
-import { border, color, h3, html, padding, span, style, table, td, tr, type HTMLGenerator } from "./html";
+import { border, color, div, h3, html, padding, span, style, table, td, tr, type HTMLGenerator } from "./html";
 import { hightLights, requests, roadMap, schedule } from "./main";
 
 
@@ -40,36 +40,42 @@ export function requestView (requests: Request[], schedule: Schedule): HTMLEleme
     whiteSpace: "nowrap",
   }), ...x)) as HTMLGenerator<HTMLTableCellElement> 
 
-  return table(
-    style({ borderCollapse: "collapse", }),
+  return div(
+    style({
+      overflow: "auto",
+      maxHeight: "80%",
+    }),
+    table(
+      style({ borderCollapse: "collapse"}),
 
-    tr(["request", "start", "end", "distanz", "preis", "frist" ].map(h=> cell(h), ), style({fontWeight: "bold"})),
-    requests.map((r, i)=>{
+      tr(["request", "start", "end", "distanz", "preis", "frist" ].map(h=> cell(h), ), style({fontWeight: "bold"})),
+      requests.map((r, i)=>{
 
-      let path = findPath(r.startPoint, r.endPoint)
+        let path = findPath(r.startPoint, r.endPoint)
 
-      let row= tr(
-        cell(requestString(r.id)),
-        cell(locString(r.startPoint)),
-        cell(locString(r.endPoint)),
-        cell(span( timeString(path.dist), style({float: "right"}))),
-        cell(span(priceString(r.value), style({float: "right"}))),
-        cell(span(timeString(r.deadline), style({float: "right"}))),
-      )
-      row.onmouseenter = ()=>{
-        row.style.backgroundColor = color.gray,
-        hightLights.set([{ points: [
-          { location: r.startPoint, logo: "📦" },
-          { location: r.endPoint, logo: "🏠" }
-        ]}])
+        let row= tr(
+          cell(requestString(r.id)),
+          cell(locString(r.startPoint)),
+          cell(locString(r.endPoint)),
+          cell(span( timeString(path.dist), style({float: "right"}))),
+          cell(span(priceString(r.value), style({float: "right"}))),
+          cell(span(timeString(r.deadline), style({float: "right"}))),
+        )
+        row.onmouseenter = ()=>{
+          row.style.backgroundColor = color.gray,
+          hightLights.set([{ points: [
+            { location: r.startPoint, logo: "📦" },
+            { location: r.endPoint, logo: "🏠" }
+          ]}])
 
-      }
-      row.onmouseleave = ()=>{
-        row.style.backgroundColor = ""
-      }
-      return row
-    })
+        }
+        row.onmouseleave = ()=>{
+          row.style.backgroundColor = ""
+        }
+        return row
+      })
 
+    )
   )
 
 }

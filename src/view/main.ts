@@ -5,13 +5,14 @@ import { randomMap } from "../randomMap";
 import { Location, randomUUID, Request, Schedule, uconst, UUID } from "../types";
 import { requestView } from "./requestView";
 import { scheduleView } from "./scheduleView";
-import { mkWritable } from "../writeable";
+import { mkStored, mkWritable, type Writable } from "../writeable";
 import { configurePlanner, optimizeSchedule } from "../planner";
 import { randChoice, random, setRandSeed } from "../random";
+import { number } from "../schema";
 
 
-const LKW_COUNT = 3;
-const REQUEST_COUNT = 20;
+let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
+let REQUEST_COUNT = mkStored("REQUEST_COUNT",  number, 20)
 
 body.style.margin = "0"
 
@@ -39,7 +40,7 @@ setRandSeed(25)
 
 export let roadMap = randomMap()
 
-export let requests: Request[] = Array.from({length:REQUEST_COUNT}, (_,i)=>({
+export let requests: Request[] = Array.from({length:REQUEST_COUNT.get()}, (_,i)=>({
   id: randomUUID(),
   startPoint: randChoice(roadMap.points),
   endPoint: randChoice(roadMap.points),
@@ -48,7 +49,7 @@ export let requests: Request[] = Array.from({length:REQUEST_COUNT}, (_,i)=>({
 }))
 
 
-export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT}, (_,i)=>({
+export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT.get()}, (_,i)=>({
   transporter: randomUUID(),
   steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
 })))
@@ -69,12 +70,48 @@ export type HighLight = {
 export let hightLights = mkWritable <HighLight[]>( [] )
 
 
+function setter (store: Writable<number> ){
+  let inp = input()
+  inp.type = "number"
+  inp.onchange = ()=>{
+    let val = parseInt(inp.value)
+    if (isNaN(val)) return
+    store.set(val)
+  }
+  store.onupdate(val=>inp.value = val.toString())
+
+  return inp
+}
+
+
 function mkWindow (tab: number = 0 ) {
 
   let tabFields = [
     ['map', mapView(roadMap)],
     ['requests', requestView(requests, schedule.get())],
     ['schedule', scheduleView() ],
+    ['settings', div(
+      style({
+        padding: "1em",
+      }),
+      h2("settings"),
+
+
+      table(
+        tr(
+          td("LKW count"),
+          td(setter(LKW_COUNT))
+        ),
+        tr(
+          td("Request count"),
+          td(setter(REQUEST_COUNT))
+        ),
+        tr(button("generate", ()=>{
+          window.location.reload()
+        }))
+      )
+
+    )]
   ] as const
 
   const el = div(style({

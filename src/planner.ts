@@ -4,7 +4,7 @@ import type { RoadMap } from "./randomMap";
 const DECKCAPACITY = 3;
 const UNLOADCOST = uconst(10, "eur");
 const PICKUPCOST = uconst(5, "eur");
-const COST_PER_H = 5;
+const COST_PER_H = 20;
 const COST_PER_SECOND = COST_PER_H / 3600;
 
 type PlannerContext = {
