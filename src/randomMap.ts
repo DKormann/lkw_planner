@@ -1,50 +1,68 @@
+import { randChoice, randInt, random } from "./random";
 
-import { Location, randomUUID, Time, uconst, UUID } from "./types";
-import { randChoice, random } from "./random";
+export let NPOINTS = 100
+let HPOINT = NPOINTS/2
+export let RSIZE = NPOINTS * HPOINT
+export type Pos = {x:number, y: number}
 
-
+export const MAPSIZE = 1000
 
 export function randomMap (){
 
-  let points :Location[] = []
+  let roads = new Uint16Array(RSIZE)
 
-  let roads = new Map<Location, Map<Location, Time>> ()
-  let geolocation = new Map<Location, {x: number, y: number}>()
-  let geocodes = new Map<Location, string>()
-
-  for (let i = 0; i < 100; i++){
-
-    let point: Location = `loc${randomUUID()}`
-    points.push(point)
-    geolocation.set(point , {x: random(), y: random()})
-    geocodes.set(point, `DE ${geolocation.size.toString().padStart(4, "0")}`)
-    roads.set(point, new Map())
+  function roadIDX  (a:number, b:number){
+    if (a<b) [a,b] = [b,a]
+    let idx = a + NPOINTS * b
+    if (idx>RSIZE) idx = NPOINTS**2 - idx
+    return idx 
   }
 
-  for (let [ID, p] of geolocation.entries()){
-    geolocation.entries().toArray().sort(([a,A],[b,B])=> Math.hypot(A.x - p.x, A.y - p.y) - Math.hypot(B.x - p.x, B.y - p.y))
-    .slice(1,4).forEach(([id, loc])=>{
-      let dist = uconst(Math.hypot(loc.x - p.x, loc.y - p.y) * 10 * 60 * 60, "seconds")
-      roads.get(ID)!.set(id, dist)
-      roads.get(id)!.set(ID, dist)
+  function getroad (a: number, b: number) {
+    if (a==b) throw new Error("Cannot get road from a point to itself")
+    return roads[roadIDX(a,b)]!
+  }
+
+  let rods: {a:number,b:number, dist:number}[] = []
+
+  function setroad (a: number, b: number, dist: number) {
+
+    rods.push({a,b,dist})
+    if (a==b) throw new Error("Cannot set road from a point to itself")
+    roads[roadIDX(a,b)] = dist
+  }
+
+  let range = Array.from({length: NPOINTS}, (_,i)=> i)
+  let points : Pos[] = range.map(()=>({x: randInt(0,MAPSIZE), y: randInt(0,MAPSIZE)}))
+  let neighs = points.map((ps,i)=>
+    points.map((p2, i2)=>  ({d: Math.floor(Math.hypot(ps.x - p2.x, ps.y - p2.y)), i: i2}))
+    .filter(x => x.i != i) .sort((a,b)=> a.d - b.d) )
+
+
+  let found = new Set<number>([0])
+  function find(x:number){
+
+    if (found.has(x)) return
+    found.add(x)
+    range.forEach((p,i)=>{
+      if ( i!=x && getroad(i, x) != 0) find(i)
     })
   }
 
-  return {
-    roads,
-    points,
-    geolocation(loc: Location){
-      let geo = geolocation.get(loc)
-      if (!geo) throw new Error(`Location ${loc} not found`)
-      return geo
-    },
-    geoCode(loc: Location){
-        let code = geocodes.get(loc)
-        if (!code) throw new Error(`Location ${loc} not found`)
-        return code
-      }
+  for (let x = 0; x < NPOINTS; x++){
+    for (let i = 0; i < 4; i++){
+      let x = randInt(0, NPOINTS)
+      let nx = neighs[x]?.[i]!
+      setroad(x, nx.i, nx.d)
+      if (found.has(x)) find(nx.i)
+      if (found.has(nx.i)) find(x)
     }
+  }
+
+  return { getroad, roadIDX, points, range }
 }
 
 
 export type RoadMap = typeof randomMap extends () => infer T ? T : never
+
+

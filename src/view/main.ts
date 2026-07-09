@@ -2,16 +2,17 @@ import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
 import { randomMap } from "../randomMap";
-import { Location, randomUUID, Request, Schedule, uconst, UUID } from "../types";
+import { randomUUID, Request, Schedule, UUID } from "../types";
 import { requestView } from "./requestView";
 import { scheduleView } from "./scheduleView";
 import { mkStored, mkWritable, type Writable } from "../writeable";
 import { configurePlanner, optimizeSchedule } from "../planner";
 import { randChoice, random, setRandSeed } from "../random";
 import { number } from "../schema";
+import { plannerView } from "../planners/annealing";
 
 
-let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
+export let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
 let REQUEST_COUNT = mkStored("REQUEST_COUNT",  number, 20)
 
 body.style.margin = "0"
@@ -35,33 +36,42 @@ let page = div(
 body.replaceChildren(page)
 
 
-setRandSeed(25)
+setRandSeed(24)
 
 
 export let roadMap = randomMap()
 
 export let requests: Request[] = Array.from({length:REQUEST_COUNT.get()}, (_,i)=>({
   id: randomUUID(),
-  startPoint: randChoice(roadMap.points),
-  endPoint: randChoice(roadMap.points),
-  value: uconst(Math.floor(random()*1000), "eur"),
-  deadline: uconst(Math.floor(random()*60*60*24*7), "seconds"),
+  startPoint: randChoice(roadMap.range),
+  endPoint: randChoice(roadMap.range),
+  // value: uconst(Math.floor(random()*1000), "eur"),
+  // deadline: uconst(Math.floor(random()*60*60*24*7), "seconds"),
+  value_eur: Math.floor(random()*1000),
+  deadline_km: Math.floor(random()*60*60*24*7),
 }))
 
 
+// export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT.get()}, (_,i)=>({
+//   transporter: randomUUID(),
+//   steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
+// })))
+
 export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT.get()}, (_,i)=>({
   transporter: randomUUID(),
-  steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
+  steps: [{ $:"start", val: {"pos":  randChoice(roadMap.range)}}]
 })))
+
+
 
 configurePlanner({ requests, roadMap })
 
-schedule.update(sched=>optimizeSchedule(requests, sched))
+// schedule.update(sched=>optimizeSchedule(requests, sched))
 
 
 export type HighLight = {
   points: {
-    location: Location,
+    number: number,
     logo? : string,
   }[],
   color?: string
@@ -146,4 +156,6 @@ function mkWindow (tab: number = 0 ) {
   return el
 }
 
-contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
+// contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
+
+contentSpace.replaceChildren(plannerView())

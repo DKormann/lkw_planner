@@ -1,9 +1,9 @@
 
-import type { Location, UUID } from "../types";
-import { findPath, pairId } from "../planner";
-import {  type RoadMap } from "../randomMap";
+import type { UUID } from "../types";
+import { findPath } from "../planner";
+import {  MAPSIZE, type RoadMap } from "../randomMap";
 import { div, p, style } from "./html";
-import { hightLights, requests, type HighLight } from "./main";
+import { hightLights } from "./main";
 
 
 function mkSvg (tag: "circle", x: number, y: number) : {el: SVGCircleElement, setColor: (color: string)=>void}
@@ -67,23 +67,28 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
   let elements = new Map<any, SVGElement>()
   let sources = new Map<SVGElement, any>()
   
-  for (let [id1, roads] of roadmap.roads){
-    for (let [id2, dist] of roads){
-      let a = roadmap.geolocation( id1)!
-      let b = roadmap.geolocation( id2)!
-      let line = mkSvg("line", a.x, a.y, b.x, b.y).el
-      let id = pairId(id1, id2)
+  for (let x =0 ; x < roadmap.points.length; x++){
+    for (let y = 0; y< roadmap.points.length; y++){
+      if (x == y) continue
+      let len = roadmap.getroad(x,y)
+      if (len == 0 || len == undefined) continue  
+
+
+      let a = roadmap.points[x]!
+      let b = roadmap.points[y]!
+      let line = mkSvg("line", a.x/MAPSIZE, a.y/MAPSIZE, b.x/MAPSIZE, b.y/MAPSIZE).el
+      let id = "road"+roadmap.roadIDX(x,y)
       elements.set(id, line)
       sources.set(line, id)
       element.appendChild(line)
     }
   }
   
-  for (let point of roadmap.roads.keys()){
-    let loc = roadmap.geolocation(point)
-    let circle = mkSvg("circle", loc.x, loc.y).el
-    elements.set(point, circle)
-    sources.set(circle, point)
+  for (let x =0; x<roadmap.points.length; x++){
+    let loc = roadmap.points[x]!
+    let circle = mkSvg("circle", loc.x/MAPSIZE, loc.y/MAPSIZE).el
+    elements.set(x, circle)
+    sources.set(circle, x)
     element.appendChild(circle)
   }
 
@@ -92,14 +97,14 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
   hightLights.onupdate((nH,o)=>{
     hints.forEach(el=>el.remove())
     for (let n of nH){
-      let last : Location | null = null
+      let last : number | null = null
       for (let p of n.points){
-        let next = p.location
-        if (last){
-          let path = findPath(last, next).path
+        let next = p.number
+        if (last !== null){
+          let path = findPath(last, next)
           for (let i = 0; i < path.length - 1; i++){
-            let A = roadmap.geolocation(path[i]!)!
-            let B = roadmap.geolocation(path[i+1]!)!
+            let A = roadmap.points[path[i]!]!
+            let B = roadmap.points[path[i+1]!]!
             let line = mkSvg("line", A.x, A.y, B.x, B.y)
             line.setColor(n.color ?? "#ffc988")
             line.el.setAttribute("stroke-width", "0.01")
@@ -113,7 +118,7 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
 
       for (let p of n.points){
         if (p.logo) {
-          let pos = roadmap.geolocation(p.location)
+          let pos = roadmap.points[p.number]!
           let el = mkSvg("text", pos.x, pos.y, p.logo)
           el.el.setAttribute("z-index", "1000")
           element.appendChild(el.el)
@@ -125,6 +130,8 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
 
   let dv = div(style({width:"100%", display:"flex", justifyContent:"center", padding: "1em"}))
   dv.append(element)
+
+
   return dv
 }
 

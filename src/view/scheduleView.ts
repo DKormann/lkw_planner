@@ -1,9 +1,9 @@
-import { uconst, iadd, type ScheduleItem, type UUID, ScheduleStep, Time, add, Request } from "../types";
-import { getCost, optDur, optimizeSchedule, rateSchedule } from "../planner";
+import { type ScheduleItem, type UUID, ScheduleStep, Request } from "../types";
+import { getCostN, optDur, optimizeSchedule, rateSchedule } from "../planner";
 import { mkWritable } from "../writeable";
 import { background, body, borderRadius, button, color, div, h2, html, p, padding, span, style, table, td, tr, width } from "./html";
 import { hightLights, requests, roadMap, schedule } from "./main";
-import { locString, priceString, requestString, timeString, transporterString } from "./requestView";
+import { costString, distanceString, locString, requestString, timeString, transporterString } from "./requestView";
 
 
 function stepLogo (step: ScheduleStep){
@@ -28,7 +28,7 @@ function stepString (step: ScheduleStep){
 
   if (step.$ == "start") return `start`
   let req = getRequest(step.val.request)
-  return `${step.$} ${requestString(step.val.request)}: ${priceString(req.value)} deadline ${timeString(req.deadline)}`
+  return `${step.$} ${requestString(step.val.request)}: ${costString(req.value_eur)} deadline ${timeString(req.deadline_km)}`
 }
 
 let cursor = mkWritable({row: 1, col: 1})
@@ -67,14 +67,14 @@ export const scheduleView = () => {
   let stepEls = [] as HTMLSpanElement[][]
   let rowEls = [] as HTMLTableRowElement[]
 
-  let times : Time[][] = []
+  let times : number[][] = []
 
   let decks : [Request[], Request[]] [] []  = []
 
   
   schedule.onupdate(sched => {
 
-    times = sched.map(s=> [uconst(0, "seconds")])
+    times = sched.map(s=> [0])
     decks = sched.map(s=> [[[], []]])
 
 
@@ -106,8 +106,8 @@ export const scheduleView = () => {
       let logo = stepLogo(step)
 
       hightLights.set([
-        { points: steps.slice(n,n+2).map((p,i)=>({location: p.val.pos})), color: "#ffc988" },
-        { points: [{location:step.val.pos, logo}] }
+        { points: steps.slice(n,n+2).map((p,i)=>({number: p.val.pos})), color: "#ffc988" },
+        { points: [{number:step.val.pos, logo}] }
       ])
     }, true)
 
@@ -118,15 +118,15 @@ export const scheduleView = () => {
       ["transporter", "steps"].map(h=> cell(h), ), style({fontWeight: "bold"}),
       sched.map((s, rown)=>{
 
-        let allPoints = s.steps.map(step=> ({ location: step.val.pos, logo: stepLogo(step) }))
+        let allPoints = s.steps.map(step=> ({ number: step.val.pos, logo: stepLogo(step) }))
         let transport = span(transporterString(s.transporter))
         transport.onmouseenter = ()=>hightLights.set([{points: allPoints, color: "#ffc988",}])
 
         stepEls.push( s.steps.map((step,i)=>{
           if (i>0){
             let prev = s.steps[i-1]!
-            let dist = getCost(prev.val.pos, step.val.pos)
-            times[rown]!.push(add(times[rown]![i-1]!, dist))
+            let dist = getCostN(prev.val.pos, step.val.pos)
+            times[rown]!.push(times[rown]![i-1]!+ dist)
 
             // console.log("DECK", rown, i, decks[rown]![i-1]!)
             let deck = [...decks[rown]![i-1]!] as [Request[], Request[]]
@@ -143,7 +143,7 @@ export const scheduleView = () => {
 
           let logo = stepLogo(step)
           let res = span(logo, style({padding: ".1em .1em",
-            background:req && req.deadline.value < time.value ? color.red : "",
+            background:req && req.deadline_km < time ? color.red : "",
             border: "0.2em solid " + color.background,
             borderRadius: "0.3em",
             
@@ -197,7 +197,7 @@ export const scheduleView = () => {
     tabview,
     rejectView,
     p("Value: ", value),
-    p("search time:", optDur),
+    p("search number:", optDur),
     stepview,
   )
   return scheduleEl
@@ -205,7 +205,7 @@ export const scheduleView = () => {
 
 
 
-function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total: Time, decks: [Request[], Request[]]){
+function viewStep(row: number, n: number, parent: HTMLElement, dist: number, total: number, decks: [Request[], Request[]]){
   let steps = schedule.get()[row]
   if (!steps) return
   let step = steps.steps[n]
@@ -260,11 +260,11 @@ function viewStep(row: number, n: number, parent: HTMLElement, dist: Time, total
 
 
 
-  let dead = step.$ != "start" && getRequest(step.val.request).deadline.value < dist.value
+  let dead = step.$ != "start" && getRequest(step.val.request).deadline_km < dist
 
   let res = div(
     h2(transporterString(steps.transporter)),
-    p(`${timeString(dist)} / ${timeString(total)}`),
+    p(`${distanceString(dist)} / ${distanceString(total)}`),
     p(stepString(step), style({color: dead ? color.red : color.color})),
     style({
       border: "1px solid var(--gray)",

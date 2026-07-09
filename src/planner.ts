@@ -1,9 +1,9 @@
-import { Time, add, iadd, isub, mul, uconst, type Location, type Request, type Schedule, type ScheduleItem, type ScheduleStep, type UUID } from "./types";
-import type { RoadMap } from "./randomMap";
+import { type Request, type Schedule, type ScheduleItem, type ScheduleStep, type UUID } from "./types";
+import { RSIZE, type RoadMap } from "./randomMap";
 
 const DECKCAPACITY = 3;
-const UNLOADCOST = uconst(10, "eur");
-const PICKUPCOST = uconst(5, "eur");
+const UNLOADCOST = 10
+const PICKUPCOST = 5
 const COST_PER_H = 20;
 const COST_PER_SECOND = COST_PER_H / 3600;
 
@@ -21,10 +21,13 @@ type InsertionCandidate = {
 };
 
 let plannerContext: PlannerContext | null = null;
+let costMatrixReady = false;
 
 export function configurePlanner(context: PlannerContext) {
   plannerContext = context;
-  CostMatrix.clear();
+  CostMatrix.fill(0);
+  costMatrixReady = false;
+  buildCostMatrix();
 }
 
 function getPlannerContext(): PlannerContext {
@@ -34,96 +37,90 @@ function getPlannerContext(): PlannerContext {
   return plannerContext;
 }
 
-export function pairId(a: string, b: string): string {
-  return a < b ? `${a}-${b}` : `${b}-${a}`;
-}
+export const CostMatrix = new Uint32Array(RSIZE);
 
-const CostMatrix = new Map<string, Time>();
-
-export function findPath(start: Location, end: Location): { path: Location[]; dist: Time } {
+export function buildCostMatrix(): void {
   const { roadMap } = getPlannerContext();
-  const id = pairId(start, end);
+  const pointCount = roadMap.points.length;
+  const INF = 0xffff;
 
-  if (start === end) {
-    const dist = uconst(0, "seconds");
-    CostMatrix.set(id, dist);
-    return { path: [start], dist };
-  }
+  CostMatrix.fill(INF);
 
-  const dist = new Map<Location, Time>();
-  const prev = new Map<Location, Location | null>();
-  const unvisited = new Set<Location>(roadMap.points);
+  for (let start = 0; start < pointCount; start++) {
+    const dist = new Uint32Array(pointCount);
+    const visited = new Uint8Array(pointCount);
+    dist.fill(INF);
+    dist[start] = 0;
 
-  for (const point of roadMap.points) {
-    dist.set(point, uconst(Infinity, "seconds"));
-    prev.set(point, null);
-  }
+    for (let step = 0; step < pointCount; step++) {
+      let current = -1;
+      let best = INF;
 
-  dist.set(start, uconst(0, "seconds"));
+      for (let node = 0; node < pointCount; node++) {
+        if (visited[node] === 0 && dist[node]! < best) {
+          best = dist[node]!;
+          current = node;
+        }
+      }
 
-  while (unvisited.size > 0) {
-    let current: Location | null = null;
-    let currentDist = Infinity;
+      if (current === -1) break;
+      visited[current] = 1;
 
-    for (const point of unvisited) {
-      const pointDist = dist.get(point)!.value;
-      if (pointDist < currentDist) {
-        current = point;
-        currentDist = pointDist;
+      for (let next = 0; next < pointCount; next++) {
+        if (next === current) continue;
+        const road = roadMap.getroad(current, next);
+        if (road === 0) continue;
+        const nextCost = dist[current]! + road;
+        if (nextCost < dist[next]!) {
+          dist[next] = nextCost;
+        }
       }
     }
 
-    if (current == null || currentDist === Infinity) {
-      break;
-    }
-
-    unvisited.delete(current);
-
-    if (current === end) {
-      break;
-    }
-
-    for (const [next, segment] of roadMap.roads.get(current) ?? []) {
-      if (!unvisited.has(next)) {
-        continue;
-      }
-      const candidate = add(dist.get(current)!, segment);
-      if (candidate.value < dist.get(next)!.value) {
-        dist.set(next, candidate);
-        prev.set(next, current);
-      }
+    for (let end = 0; end < pointCount; end++) {
+      if (end === start) continue;
+      const idx = roadMap.roadIDX(start, end);
+      CostMatrix[idx] = Math.min(dist[end]!, INF);
     }
   }
 
-  const totalDist = dist.get(end);
-  if (!totalDist || totalDist.value === Infinity) {
-    throw new Error(`No path found from ${start} to ${end}`);
-  }
-
-  const path: Location[] = [];
-  let cursor: Location | null = end;
-  while (cursor != null) {
-    path.push(cursor);
-    cursor = prev.get(cursor) ?? null;
-  }
-  path.reverse();
-
-  CostMatrix.set(id, totalDist);
-  return { path, dist: totalDist };
+  costMatrixReady = true;
 }
 
-export function getCost(start: Location, end: Location): Time {
-  const id = pairId(start, end);
-  if (!CostMatrix.has(id)) {
-    findPath(start, end);
+function ensureCostMatrix(): void {
+  if (!costMatrixReady) {
+    buildCostMatrix();
   }
-  return CostMatrix.get(id)!;
 }
 
-export function getCostN(...points: Location[]): Time {
-  const cost = uconst(0, "seconds");
+export function findPath(start: number, end: number):number[] {
+  const { roadMap } = getPlannerContext();
+  ensureCostMatrix();
+  let path : number[] = [start]
+  let cost = CostMatrix[roadMap.roadIDX(start,end)]
+  while (start != end){
+    for (let x = 0; x < roadMap.points.length; x++){
+      if (x == start) continue
+      let road = roadMap.getroad(start,x)
+      if (road == 0) continue
+      let restcost = CostMatrix[roadMap.roadIDX(x,end)]!
+      if (road+ restcost == cost){
+        cost = restcost
+        start = x
+        path.push(x)
+        break
+      }
+    }
+  }
+  return path
+}
+
+export function getCostN(...points: number[]): number {
+  const { roadMap } = getPlannerContext();
+  ensureCostMatrix();
+  let cost = 0;
   for (let i = 0; i < points.length - 1; i++) {
-    iadd(cost, getCost(points[i]!, points[i + 1]!));
+    cost += CostMatrix[roadMap.roadIDX(points[i]!, points[i + 1]!)]!;
   }
   return cost;
 }
@@ -139,9 +136,9 @@ function routeScore(item: ScheduleItem, requestsById: Map<UUID, Request>): numbe
     return -Infinity;
   }
 
-  const reward = uconst(0, "eur");
-  const duration = uconst(0, "seconds");
-  const decks: [UUID[], UUID[]] = [[], []];
+  let reward_eur = 0
+  let duration_sec = 0
+  let decks: [UUID[], UUID[]] = [[], []];
 
   function unload(reqId: UUID, deck: 0 | 1): boolean {
     const idx = decks[deck].indexOf(reqId);
@@ -150,8 +147,8 @@ function routeScore(item: ScheduleItem, requestsById: Map<UUID, Request>): numbe
     }
     const after = decks[deck].slice(idx + 1);
     decks[deck] = decks[deck].slice(0, idx).concat(after);
-    isub(reward, UNLOADCOST);
-    isub(reward, mul(add(UNLOADCOST, PICKUPCOST), after.length));
+    reward_eur -= UNLOADCOST + (UNLOADCOST + PICKUPCOST) * after.length;
+
     return true;
   }
 
@@ -159,7 +156,7 @@ function routeScore(item: ScheduleItem, requestsById: Map<UUID, Request>): numbe
     const prev = item.steps[i - 1]!;
     const step = item.steps[i]!;
 
-    iadd(duration, getCost(prev.val.pos, step.val.pos));
+    duration_sec+=  getCostN(prev.val.pos, step.val.pos);
 
     if (step.$ === "pickup") {
       decks[step.val.deck].push(step.val.request);
@@ -177,8 +174,8 @@ function routeScore(item: ScheduleItem, requestsById: Map<UUID, Request>): numbe
       if (!unload(step.val.request, 0) && !unload(step.val.request, 1)) {
         return -Infinity;
       }
-      if (duration.value <= req.deadline.value) {
-        iadd(reward, req.value);
+      if (duration_sec <= req.deadline_km) {
+        reward_eur+ req.value_eur;
       }
       continue;
     }
@@ -186,7 +183,7 @@ function routeScore(item: ScheduleItem, requestsById: Map<UUID, Request>): numbe
     return -Infinity;
   }
 
-  return reward.value - duration.value * COST_PER_SECOND;
+  return reward_eur - duration_sec * COST_PER_SECOND;
 }
 
 function safeRouteScore(item: ScheduleItem, requestsById: Map<UUID, Request>): number {
@@ -240,8 +237,8 @@ function assignedRequestIds(schedule: Schedule): Set<UUID> {
 
 function requestPriority(request: Request): number {
   try {
-    const directTravel = getCost(request.startPoint, request.endPoint).value * COST_PER_SECOND;
-    return request.value.value - directTravel - PICKUPCOST.value - UNLOADCOST.value;
+    const directTravel = getCostN(request.startPoint, request.endPoint) * COST_PER_SECOND;
+    return request.value_eur - directTravel - PICKUPCOST - UNLOADCOST;
   } catch {
     return -Infinity;
   }
@@ -287,7 +284,7 @@ function applyInsertion(schedule: Schedule, request: Request, candidate: Inserti
   );
 }
 
-function improveByRelocation(schedule: Schedule, requestsById: Map<UUID, Request>): Schedule {
+function improveByRenumber(schedule: Schedule, requestsById: Map<UUID, Request>): Schedule {
   let current = schedule;
   let currentScore = rateSchedule(current);
   const assigned = Array.from(assignedRequestIds(current));
@@ -333,8 +330,8 @@ export function optimizeSchedule(requests: Request[], schedule: Schedule): Sched
     }
   }
 
-  current = improveByRelocation(current, requestsById);
-  current = improveByRelocation(current, requestsById);
+  current = improveByRenumber(current, requestsById);
+  current = improveByRenumber(current, requestsById);
 
   optDur = Date.now() - startedAt;
   return current;
