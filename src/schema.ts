@@ -83,19 +83,3 @@ export const asTypeView = (schema: Schema<any>): string => {
 }
 
 
-
-export class LocalStored <T extends JsonData> {
-  constructor(public key: string, public schema: Schema<T>, public defaultValue: T){}
-
-  get():T {
-    let raw = localStorage.getItem(this.key)
-    try{
-      return validate(this.schema, JSON.parse(raw!))
-    }catch(e){
-      return this.defaultValue
-    }
-  }
-  set(value: T){
-    localStorage.setItem(this.key, JSON.stringify(validate(this.schema, value)))
-  }
-}

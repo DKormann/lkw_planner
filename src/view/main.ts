@@ -2,16 +2,15 @@ import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
 import { randomMap } from "../randomMap";
-import { Location, randomUUID, Request, Schedule, uconst, UUID } from "../types";
-import { requestView } from "./requestView";
-import { scheduleView } from "./scheduleView";
-import { mkWritable } from "../writeable";
-import { configurePlanner, optimizeSchedule } from "../planner";
+import { randomModule, randomUUID, Request, Schedule, UUID } from "../types";
+import { mkStored, mkWritable, type Writable } from "../writeable";
 import { randChoice, random, setRandSeed } from "../random";
+import { number } from "../schema";
+import { plannerView } from "../planners/annealing";
 
 
-const LKW_COUNT = 3;
-const REQUEST_COUNT = 20;
+export let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
+let REQUEST_COUNT = mkStored("REQUEST_COUNT",  number, 20)
 
 body.style.margin = "0"
 
@@ -33,34 +32,13 @@ let page = div(
 
 body.replaceChildren(page)
 
+setRandSeed(24)
 
-setRandSeed(25)
-
-
-export let roadMap = randomMap()
-
-export let requests: Request[] = Array.from({length:REQUEST_COUNT}, (_,i)=>({
-  id: randomUUID(),
-  startPoint: randChoice(roadMap.points),
-  endPoint: randChoice(roadMap.points),
-  value: uconst(Math.floor(random()*1000), "eur"),
-  deadline: uconst(Math.floor(random()*60*60*24*7), "seconds"),
-}))
-
-
-export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT}, (_,i)=>({
-  transporter: randomUUID(),
-  steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
-})))
-
-configurePlanner({ requests, roadMap })
-
-schedule.update(sched=>optimizeSchedule(requests, sched))
-
+export let module = randomModule()
 
 export type HighLight = {
   points: {
-    location: Location,
+    number: number,
     logo? : string,
   }[],
   color?: string
@@ -69,12 +47,49 @@ export type HighLight = {
 export let hightLights = mkWritable <HighLight[]>( [] )
 
 
+function setter (store: Writable<number> ){
+  let inp = input()
+  inp.type = "number"
+  inp.onchange = ()=>{
+    let val = parseInt(inp.value)
+    if (isNaN(val)) return
+    store.set(val)
+  }
+  store.onupdate(val=>inp.value = val.toString())
+
+  return inp
+}
+
+
 function mkWindow (tab: number = 0 ) {
 
   let tabFields = [
-    ['map', mapView(roadMap)],
-    ['requests', requestView(requests, schedule.get())],
-    ['schedule', scheduleView() ],
+    ['map', mapView(module)],
+    // ['requests', requestView(module.requests)],
+    // ['schedule', scheduleView() ],
+    ['planner', plannerView(module)],
+    // ['settings', div(
+    //   style({
+    //     padding: "1em",
+    //   }),
+    //   h2("settings"),
+
+
+    //   table(
+    //     tr(
+    //       td("LKW count"),
+    //       td(setter(LKW_COUNT))
+    //     ),
+    //     tr(
+    //       td("Request count"),
+    //       td(setter(REQUEST_COUNT))
+    //     ),
+    //     tr(button("generate", ()=>{
+    //       window.location.reload()
+    //     }))
+    //   )
+
+    // )]
   ] as const
 
   const el = div(style({
@@ -83,11 +98,18 @@ function mkWindow (tab: number = 0 ) {
     height: "calc(100vh - 1em)",
     border: "1px solid "+color.gray,
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
   }))
 
   function openTab(tab: typeof tabFields[number][0]) {
-    el.replaceChildren(
-      p(tabFields.map(([n,e])=>
+    const tabs = p(
+      style({
+        margin: "0",
+        padding: ".4em",
+        flex: "0 0 auto",
+      }),
+      tabFields.map(([n,e])=>
         span( n,
           ()=>openTab(n),
           style({
@@ -98,8 +120,21 @@ function mkWindow (tab: number = 0 ) {
             color: (n==tab) ? color.color : color.gray,
           })
         )
-      )),
+      )
+    )
+
+    const content = div(
+      style({
+        flex: "1 1 auto",
+        minHeight: "0",
+        minWidth: "0",
+      }),
       tabFields.find(([n,])=>n==tab)![1]
+    )
+
+    el.replaceChildren(
+      tabs,
+      content
     )
   }
 
@@ -109,4 +144,4 @@ function mkWindow (tab: number = 0 ) {
   return el
 }
 
-contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
+contentSpace.replaceChildren(mkWindow(1 ), mkWindow())

@@ -41,7 +41,11 @@ async function devLoop(){
 
 if (argv.includes("dev")) devLoop()
 
-const port = 3030
+let port = 3030
+argv.forEach((arg, i)=>{
+  if (arg == "--port" && argv[i+1]) port = Number(argv[i+1])
+})
+
 
 
 Bun.serve({

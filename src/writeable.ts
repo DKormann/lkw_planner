@@ -1,8 +1,8 @@
-import type { JsonData } from "./schema"
+import { validate, type JsonData, type Schema } from "./schema"
+
 
 
 export function mkWritable<T extends JsonData> (value: T) {
-
 
   let listeners: ((newValue: T, oldValue: T)=>void)[] = []
   let rep = JSON.stringify(value)
@@ -16,8 +16,8 @@ export function mkWritable<T extends JsonData> (value: T) {
       listeners.forEach((listener) => listener(newValue, value))
       value = newValue
     },
-    onupdate: (listener: (newValue: T, oldValue :T)=>void) => {
-      listener(value, value)
+    onupdate: (listener: (newValue: T, oldValue :T)=>void, deferred = false) => {
+      if (!deferred) listener(value, value)
       listeners.push(listener)
     },
     update: (callback: (oldValue: T)=>T | undefined) => {
@@ -31,4 +31,20 @@ export function mkWritable<T extends JsonData> (value: T) {
 
 }
 
+export type Writable<T extends JsonData> = ReturnType<typeof mkWritable<T>>
+
+export function mkStored <T extends JsonData> (key: string, schema: Schema<T>, defaultValue: T) {
+  let val = defaultValue
+  try{
+    val = validate(schema, JSON.parse(localStorage.getItem(key)!))
+  }catch{}
+
+  let res = mkWritable<T>(val)
+  
+  res.onupdate((newValue)=>{
+    localStorage.setItem(key, JSON.stringify(newValue))
+  })
+
+  return res
+}
 
