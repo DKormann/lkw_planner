@@ -1,7 +1,7 @@
 
-import type { UUID } from "../types";
-import { findPath } from "../planner";
-import {  MAPSIZE, type RoadMap } from "../randomMap";
+import type { Module, UUID } from "../types";
+// import { findPath } from "../planner";
+import {  type RoadMap } from "../randomMap";
 import { div, p, style } from "./html";
 import { hightLights } from "./main";
 
@@ -55,7 +55,10 @@ function mkSvg (tag: "circle" | "line" | "text", x1: number, y1: number, x2?: nu
 
 
 
-export function mapView (roadmap: RoadMap ) : HTMLElement {
+export function mapView ( mod: Module ) : HTMLElement {
+
+  let {roadmap, MAPSIZE} = mod
+
 
 
   let element = document.createElementNS("http://www.w3.org/2000/svg", "svg")
@@ -101,7 +104,7 @@ export function mapView (roadmap: RoadMap ) : HTMLElement {
       for (let p of n.points){
         let next = p.number
         if (last !== null){
-          let path = findPath(last, next)
+          let path = roadmap.findPath(last, next)
           for (let i = 0; i < path.length - 1; i++){
             let A = roadmap.points[path[i]!]!
             let B = roadmap.points[path[i+1]!]!

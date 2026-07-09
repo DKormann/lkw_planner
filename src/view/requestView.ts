@@ -1,9 +1,7 @@
 import { Request, UUID, type Schedule } from "../types";
-import { findPath, getCostN } from "../planner";
 import type { RoadMap } from "../randomMap";
 import type { Infer } from "../schema";
 import { border, color, div, h3, html, padding, span, style, table, td, tr, type HTMLGenerator } from "./html";
-import { hightLights, requests, roadMap, schedule } from "./main";
 
 
 export function locString (loc: number) {
@@ -11,7 +9,7 @@ export function locString (loc: number) {
 }
 
 export function transporterString (tran: UUID) {
-  return `🚛 ${schedule.get().findIndex(s=>s.transporter == tran).toString().padStart(4, '0')}`
+  return `🚛 ${schedule_store.get().findIndex(s=>s.transporter == tran).toString().padStart(4, '0')}`
 }
 
 export function timeString (secs: number){
@@ -33,7 +31,7 @@ export function distanceString (dist: number){
 }
 
 
-export function requestView (requests: Request[], schedule: Schedule): HTMLElement{
+export function requestView (requests: Request[]): HTMLElement{
 
   let cell = ((...x) => td(style({
     border: "1px solid var(--gray)",
@@ -62,7 +60,7 @@ export function requestView (requests: Request[], schedule: Schedule): HTMLEleme
           cell(locString(r.endPoint)),
           cell(span(distanceString(dist), style({float: "right"}))),
           cell(span(costString(r.value_eur), style({float: "right"}))),
-          cell(span(timeString(r.deadline_km), style({float: "right"}))),
+          cell(span(timeString(r.deadline_h), style({float: "right"}))),
         )
         row.onmouseenter = ()=>{
           row.style.backgroundColor = color.gray,

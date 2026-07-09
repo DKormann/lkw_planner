@@ -1,13 +1,14 @@
 import { randChoice, randInt, random } from "./random";
 
-export let NPOINTS = 100
-let HPOINT = NPOINTS/2
-export let RSIZE = NPOINTS * HPOINT
+
 export type Pos = {x:number, y: number}
 
-export const MAPSIZE = 1000
 
-export function randomMap (){
+export function randomMap (NPOINTS:number, MAPSIZE:number){
+
+  let HPOINT = NPOINTS/2
+  let RSIZE = NPOINTS * HPOINT
+
 
   let roads = new Uint16Array(RSIZE)
 
@@ -15,6 +16,7 @@ export function randomMap (){
     if (a<b) [a,b] = [b,a]
     let idx = a + NPOINTS * b
     if (idx>RSIZE) idx = NPOINTS**2 - idx
+
     return idx 
   }
 
@@ -59,10 +61,95 @@ export function randomMap (){
     }
   }
 
-  return { getroad, roadIDX, points, range }
+
+
+
+  const CostMatrix = new Uint32Array(RSIZE);
+
+  {
+  
+    const pointCount = points.length;
+    const INF = 0xffff;
+  
+    CostMatrix.fill(INF);
+  
+    for (let start = 0; start < pointCount; start++) {
+      const dist = new Uint32Array(pointCount);
+      const visited = new Uint8Array(pointCount);
+      dist.fill(INF);
+      dist[start] = 0;
+  
+      for (let step = 0; step < pointCount; step++) {
+        let current = -1;
+        let best = INF;
+  
+        for (let node = 0; node < pointCount; node++) {
+          if (visited[node] === 0 && dist[node]! < best) {
+            best = dist[node]!;
+            current = node;
+          }
+        }
+  
+        if (current === -1) break;
+        visited[current] = 1;
+  
+        for (let next = 0; next < pointCount; next++) {
+          if (next === current) continue;
+          const road = getroad(current, next);
+          if (road === 0) continue;
+          const nextCost = dist[current]! + road;
+          if (nextCost < dist[next]!) {
+            dist[next] = nextCost;
+          }
+        }
+      }
+  
+      for (let end = 0; end < pointCount; end++) {
+        if (end === start) continue;
+        const idx = roadIDX(start, end);
+        CostMatrix[idx] = Math.min(dist[end]!, INF);
+      }
+    }
+  
+  }
+
+
+
+  function findPath(start: number, end: number):number[] {
+
+    let path : number[] = [start]
+    let cost = CostMatrix[roadIDX(start,end)]
+    while (start != end){
+      for (let x = 0; x < points.length; x++){
+        if (x == start) continue
+        let road = getroad(start,x)
+        if (road == 0) continue
+        let restcost = CostMatrix[roadIDX(x,end)]!
+        if (road+ restcost == cost){
+          cost = restcost
+          start = x
+          path.push(x)
+          break
+        }
+      }
+    }
+    return path
+  }
+  
+  function getCostN(...points: number[]): number {
+  
+    let cost = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      cost += CostMatrix[roadIDX(points[i]!, points[i + 1]!)]!;
+    }
+    return cost;
+  }
+
+
+  return { getroad, roadIDX, points, range, CostMatrix, findPath, getCostN}
 }
 
 
-export type RoadMap = typeof randomMap extends () => infer T ? T : never
+export type RoadMap = typeof randomMap extends (...x:any) => (infer T) ? T : never
 
 

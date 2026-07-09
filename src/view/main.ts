@@ -2,11 +2,8 @@ import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
 import { randomMap } from "../randomMap";
-import { randomUUID, Request, Schedule, UUID } from "../types";
-import { requestView } from "./requestView";
-import { scheduleView } from "./scheduleView";
+import { randomModule, randomUUID, Request, Schedule, UUID } from "../types";
 import { mkStored, mkWritable, type Writable } from "../writeable";
-import { configurePlanner, optimizeSchedule } from "../planner";
 import { randChoice, random, setRandSeed } from "../random";
 import { number } from "../schema";
 import { plannerView } from "../planners/annealing";
@@ -35,39 +32,9 @@ let page = div(
 
 body.replaceChildren(page)
 
-
 setRandSeed(24)
 
-
-export let roadMap = randomMap()
-
-export let requests: Request[] = Array.from({length:REQUEST_COUNT.get()}, (_,i)=>({
-  id: randomUUID(),
-  startPoint: randChoice(roadMap.range),
-  endPoint: randChoice(roadMap.range),
-  // value: uconst(Math.floor(random()*1000), "eur"),
-  // deadline: uconst(Math.floor(random()*60*60*24*7), "seconds"),
-  value_eur: Math.floor(random()*1000),
-  deadline_km: Math.floor(random()*60*60*24*7),
-}))
-
-
-// export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT.get()}, (_,i)=>({
-//   transporter: randomUUID(),
-//   steps: [{ $:"start", val: {"pos":  randChoice(roadMap.points)}}]
-// })))
-
-export let schedule = mkWritable<Schedule> (Array.from({length: LKW_COUNT.get()}, (_,i)=>({
-  transporter: randomUUID(),
-  steps: [{ $:"start", val: {"pos":  randChoice(roadMap.range)}}]
-})))
-
-
-
-configurePlanner({ requests, roadMap })
-
-// schedule.update(sched=>optimizeSchedule(requests, sched))
-
+export let module = randomModule()
 
 export type HighLight = {
   points: {
@@ -97,9 +64,10 @@ function setter (store: Writable<number> ){
 function mkWindow (tab: number = 0 ) {
 
   let tabFields = [
-    ['map', mapView(roadMap)],
-    ['requests', requestView(requests, schedule.get())],
-    ['schedule', scheduleView() ],
+    ['map', mapView(module)],
+    // ['requests', requestView(module.requests)],
+    // ['schedule', scheduleView() ],
+    ['planner', plannerView(module)],
     ['settings', div(
       style({
         padding: "1em",
@@ -156,6 +124,5 @@ function mkWindow (tab: number = 0 ) {
   return el
 }
 
-// contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
+contentSpace.replaceChildren(mkWindow(1 ), mkWindow())
 
-contentSpace.replaceChildren(plannerView())

@@ -1,40 +1,19 @@
-import { random } from "./random";
+import { randChoice, randInt, random } from "./random";
+import { randomMap } from "./randomMap";
 import { array, boolean, constant, number, object, string, tagged, union, type Infer, type Schema } from "./schema";
-
 
 export type UUID = `u${string}-${string}`
 export const UUID : Schema<UUID> = string
 
-
-// export type Unit <s extends string> = {value: number, unit: s}
-// export const Unit = <s extends string>(unit: s) => object({value: number, unit: constant(unit)})
-
-// export const uconst = <s extends string>(value: number, unit: s) : Unit<s> => ({value, unit})
-// export const add = <s extends string>(a: Unit<s>, b: Unit<s>) : Unit<s> => ({value: a.value + b.value, unit: a.unit})
-// export const iadd = <s extends string>(a: Unit<s>, b: Unit<s>) => {a.value += b.value}
-
-// export const sub = <s extends string>(a: Unit<s>, b: Unit<s>) : Unit<s> => ({value: a.value - b.value, unit: a.unit})
-// export const isub = <s extends string>(a: Unit<s>, b: Unit<s>) => {a.value -= b.value}
-// export const mul = <s extends string>(a: Unit<s>, b: number) : Unit<s> => ({value: a.value * b, unit: a.unit})
-
-
 export function randomUUID() {return "u" + random().toString(16).slice(2,10) + "-" + random().toString(16).slice(2,10) as UUID}
 
-// export const number = Unit("eur")
-// export const number = Unit("seconds")
-// export type number = Unit<"eur">
-// export type number = Unit<"seconds">
-
-
-// export type number = `loc${string}`
-// export const number : Schema<number> = string
 
 export const Request = object({
   id: UUID,
   startPoint: number,
   endPoint: number,
   value_eur: number,
-  deadline_km: number,
+  deadline_h: number,
 })
 
 export const Transporter = object({ id: UUID, position: UUID, })
@@ -63,4 +42,35 @@ export type Transporter = Infer<typeof Transporter>
 export type ScheduleStep = Infer<typeof ScheduleStep>
 export type ScheduleItem = Infer<typeof ScheduleItem>
 export type Schedule = Infer<typeof Schedule>
+
+
+export function randomModule (
+  NREQS = 40,
+  NTRANS = 10,
+  NPOINTS = 100,
+  MAPSIZE = 400,
+  seed = 22,
+){
+
+  const roadmap = randomMap(NPOINTS, MAPSIZE)
+
+  return {
+    NTRANS,
+    NREQS,
+    MAPSIZE,
+    RSIZE: NPOINTS * NPOINTS / 2,
+    roadmap,
+    requests: Array.from({length:NREQS}, (_,i)=> ({
+      id: randomUUID(),
+      "deadline_h" : randInt(0, Math.floor( random()* MAPSIZE*4)),
+      "startPoint": randChoice(roadmap.range) as number,
+      "endPoint": randChoice(roadmap.range) as number,
+      "value_eur": randInt(0, 1000),
+    }) as Request),
+    startpositions: Array.from({length:NTRANS}, (_,i)=>randChoice(roadmap.range) as number),
+  }
+}
+
+
+export type Module = typeof randomModule extends (...x:any) => (infer T) ? T : never
 
