@@ -68,28 +68,28 @@ function mkWindow (tab: number = 0 ) {
     // ['requests', requestView(module.requests)],
     // ['schedule', scheduleView() ],
     ['planner', plannerView(module)],
-    ['settings', div(
-      style({
-        padding: "1em",
-      }),
-      h2("settings"),
+    // ['settings', div(
+    //   style({
+    //     padding: "1em",
+    //   }),
+    //   h2("settings"),
 
 
-      table(
-        tr(
-          td("LKW count"),
-          td(setter(LKW_COUNT))
-        ),
-        tr(
-          td("Request count"),
-          td(setter(REQUEST_COUNT))
-        ),
-        tr(button("generate", ()=>{
-          window.location.reload()
-        }))
-      )
+    //   table(
+    //     tr(
+    //       td("LKW count"),
+    //       td(setter(LKW_COUNT))
+    //     ),
+    //     tr(
+    //       td("Request count"),
+    //       td(setter(REQUEST_COUNT))
+    //     ),
+    //     tr(button("generate", ()=>{
+    //       window.location.reload()
+    //     }))
+    //   )
 
-    )]
+    // )]
   ] as const
 
   const el = div(style({
@@ -98,11 +98,18 @@ function mkWindow (tab: number = 0 ) {
     height: "calc(100vh - 1em)",
     border: "1px solid "+color.gray,
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
   }))
 
   function openTab(tab: typeof tabFields[number][0]) {
-    el.replaceChildren(
-      p(tabFields.map(([n,e])=>
+    const tabs = p(
+      style({
+        margin: "0",
+        padding: ".4em",
+        flex: "0 0 auto",
+      }),
+      tabFields.map(([n,e])=>
         span( n,
           ()=>openTab(n),
           style({
@@ -113,8 +120,21 @@ function mkWindow (tab: number = 0 ) {
             color: (n==tab) ? color.color : color.gray,
           })
         )
-      )),
+      )
+    )
+
+    const content = div(
+      style({
+        flex: "1 1 auto",
+        minHeight: "0",
+        minWidth: "0",
+      }),
       tabFields.find(([n,])=>n==tab)![1]
+    )
+
+    el.replaceChildren(
+      tabs,
+      content
     )
   }
 
@@ -125,4 +145,3 @@ function mkWindow (tab: number = 0 ) {
 }
 
 contentSpace.replaceChildren(mkWindow(1 ), mkWindow())
-

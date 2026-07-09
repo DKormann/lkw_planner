@@ -1,8 +1,9 @@
 
 
 import { randInt, random } from "../random"
-import { color, display, div, p, pre, style } from "../view/html"
+import { borderRadius, color, display, div, p, popup, pre, span, style, table, td, th, tr } from "../view/html"
 import type { Module } from "../types"
+import { hightLights } from "../view/main"
 
 
 function isload(x:number){
@@ -23,9 +24,9 @@ function getPos(x:number){
 
 
 
-const KM_COST = 0.2
-const AVG_SPEED_KMH = 70
-const REORG_COST_EUR = 2000
+const KM_COST = .5
+const AVG_SPEED_KMH = 60
+const REORG_COST_EUR = 100
 
 export function simpleAnnealing(mod: Module){
 
@@ -79,10 +80,8 @@ export function simpleAnnealing(mod: Module){
   const scheduleRatings = Int32Array.from({length: NTRANS}, (_, i)=>score(i))
 
   function setReq(tran: number, idx: number, isload: 1|0, deck: 1|0, req: number, pos:number){
-    // console.log("set req", {tran, idx, isload, deck, req})
     schedule[tran * TSIZE + idx] = (isload << 0) | (deck << 1) | (req << 2) | (pos << 16)
   }
-
 
   function insertStops(tran:number, start:number, end: number, deck: 0|1, req:number){
 
@@ -103,13 +102,11 @@ export function simpleAnnealing(mod: Module){
     schedule.copyWithin(offset + end - 1, offset + end + 1, offset + size)
   }
 
-  let temp = 1
+  let start_temp = 100
+  let temp = start_temp
 
   function accept(prev_rating:number, next_rating: number){
-    if (next_rating>prev_rating) return true
-    let decay = (prev_rating - next_rating) / (prev_rating + 0.001)
-    let p = 1 - (decay / (temp + 0.001))
-    return random() < p
+    return random() < Math.exp((next_rating-prev_rating) / temp)
   }
 
   function tryAssign(){
@@ -160,15 +157,13 @@ export function simpleAnnealing(mod: Module){
 
   let st = Date.now()
 
-  let NSTEPS = 10000
+  let NSTEPS = 400000
 
   for (let i = 0; i < NSTEPS; i++){
-    temp = 1-(i/NSTEPS)
+    temp = (1-((i)/NSTEPS)) * start_temp
     tryUnassign()
     tryAssign()
   }
-
-
 
   time = Date.now() - st
 
@@ -183,42 +178,118 @@ let time = 0
 
 let annealer : ReturnType<typeof simpleAnnealing> | null = null
 
-export function plannerView(mod: Module):HTMLElement{
-  if (annealer == null) annealer = simpleAnnealing(mod)
-  let tab = div(
-    style({ display: "flex", flexDirection: "row",  maxWidth: "50vw", overflow: "auto"}),
-    mod.startpositions.map((start, tran)=>{
-      return div(
-        style({
-          padding: ".3em",
-          border: `1px solid ${color.color}`,
 
-        }),
-        p(tran),
-        p(annealer?.scheduleRatings[tran]!),
-        div(
-          style({display: "flex", flexDirection: "row"}),
-          [0,1].map(deck=>
-            div(
-              Array.from({length: annealer!.scheduleSizes[tran]!}, (_,i)=> {
-                let step = annealer?.schedule[tran*  annealer.TSIZE +  i]!
-                return div( getDeck(step) == deck ?[
-                  getReq(step)
-                ]: "",
-                style({ color: isload(step)? color.blue : color.green, height: "1em"}),
-              )
-              })
-            )
-          )
+
+
+export function plannerView(mod: Module):HTMLElement{
+  const outerBorder = "1px solid " + color.gray
+  const innerBorder = "1px solid " + color.lightgray
+  const cellPadding = ".35em .5em"
+  const scheduleCellMinHeight = "2.1em"
+
+  function itemButton (item:number){
+    let req = mod.requests[item]!
+
+    let sp = span(item.toString().padStart(3,' '),
+      style({cursor:"pointer", border: "2px solid transparent", borderRadius:".2em", whiteSpace: "pre", fontFamily:"monospace"}),
+      function(){
+        popup(
+          p("no: ", item),
+          p("value: ", req.value_eur + "€"),
+          p("dist: ", mod.roadmap.getCostN(req.startPoint, req.endPoint) + "km")
         )
+    })
+
+    sp.onmouseenter = e=>{
+
+      sp.style.borderColor = color.green
+      hightLights.set([
+        {
+          points: [{
+            number: req.startPoint,
+            logo: "📦"
+          }, {
+            number: req.endPoint,
+            logo: "🏠"
+          }],
+        }
+      ])
+    }
+
+    sp.onmouseleave = e=> {sp.style.borderColor = "transparent"}
+    return sp
+  }
+
+  if (annealer == null) annealer = simpleAnnealing(mod)
+
+
+  let tab = table(
+    style({
+      borderCollapse: "collapse",
+      width: "100%",
+    }),
+
+    tr(
+      th("transporter", style({border: outerBorder, padding: cellPadding, textAlign: "left"})),
+      th("value", style({border: outerBorder, padding: cellPadding, textAlign: "left"})),
+      th("steps", style({border: outerBorder, padding: cellPadding, textAlign: "left"}))
+    ),
+    mod.startpositions.map((start, tran)=>{
+      return tr(
+
+        td(tran, style({border: outerBorder, padding: cellPadding, verticalAlign: "top"})),
+        td(annealer?.scheduleRatings[tran]!, style({border: outerBorder, padding: cellPadding, verticalAlign: "top"})),
+        table(
+          style({
+            borderCollapse: "collapse",
+          }),
+
+          [0,1].map(deck=>tr(
+            Array.from({length: annealer!.scheduleSizes[tran]!}, (_,i)=>{
+              let step = annealer?.schedule[tran* annealer.TSIZE + i]!
+              return td(
+                (getDeck(step) == deck) ? itemButton(getReq(step)) : "",
+                style({
+                  color: isload(step) ? color.blue : color.green,
+                  border: innerBorder,
+                  padding: ".2em .3em",
+                  minWidth: "2.6em",
+                  height: scheduleCellMinHeight,
+                  boxSizing: "border-box",
+                })
+              )
+            })
+          ))
+        ),
+        style({
+          border: outerBorder,
+          padding: ".25em",
+          verticalAlign: "top",
+        })
       )
     })
   )
+
   
   return div(
-    tab,
-    p("unassigned:", Array.from(annealer.unassigned).map((x,i)=>({x,i})).filter(x=>x.x).map(x=>x.i).join(" ")),
-    p("time:", time),
+    style({
+      padding: "1em",
+      overflowY: "auto",
+      overflowX: "hidden",
+      height: "100%",
+      boxSizing: "border-box",
+      minHeight: "0",
+    }),
+    div(
+      style({
+        overflowX: "auto",
+        overflowY: "hidden",
+        maxWidth: "100%",
+      }),
+      tab
+    ),
+    p("unassigned: ", Array.from(annealer.unassigned).map((x,i)=>({x,i})).filter(x=>x.x).map(x=>span(" ", itemButton(x.i)))),
+    p("search time: ", time, "ms"),
     p("score:", annealer.scheduleRatings.reduce((x,y)=>x+y))
   )
 }

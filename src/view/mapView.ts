@@ -39,15 +39,14 @@ function mkSvg (tag: "circle" | "line" | "text", x1: number, y1: number, x2?: nu
     }
   }
   else if (tag == "text"){
-    el.setAttribute("x", x1.toString())
+    el.setAttribute("x",x1.toString())
     el.setAttribute("y", y1.toString())
     el.setAttribute("text-anchor", "middle")
-
-    
     el.setAttribute("dominant-baseline", "middle")
     el.textContent = String(x2)
-    el.setAttribute("font-size", "0.03")
+    el.setAttribute("font-size", ".07")
     el.setAttribute("fill", "gray")
+
     return { el, setColor: (color: string)=>{ el.setAttribute("fill", color) } }
   }
   throw new Error("Invalid tag")
@@ -104,17 +103,17 @@ export function mapView ( mod: Module ) : HTMLElement {
       for (let p of n.points){
         let next = p.number
         if (last !== null){
-          let path = roadmap.findPath(last, next)
-          for (let i = 0; i < path.length - 1; i++){
-            let A = roadmap.points[path[i]!]!
-            let B = roadmap.points[path[i+1]!]!
-            let line = mkSvg("line", A.x, A.y, B.x, B.y)
-            line.setColor(n.color ?? "#ffc988")
-            line.el.setAttribute("stroke-width", "0.01")
-            line.el.setAttribute("z-index", "100")
-            element.appendChild(line.el)
-            hints.push({remove: ()=>line.el.remove()})
-          }
+          // let path = roadmap.findPath(last, next)
+          // for (let i = 0; i < path.length - 1; i++){
+          //   let A = roadmap.points[path[i]!]!
+          //   let B = roadmap.points[path[i+1]!]!
+          //   let line = mkSvg("line", A.x/MAPSIZE, A.y/MAPSIZE, B.x/MAPSIZE, B.y/MAPSIZE)
+          //   line.setColor(n.color ?? "#ffc988")
+          //   line.el.setAttribute("stroke-width", "0.01")
+          //   line.el.setAttribute("z-index", "100")
+          //   element.appendChild(line.el)
+          //   hints.push({remove: ()=>line.el.remove()})
+          // }
         }
         last = next
       }
@@ -122,7 +121,7 @@ export function mapView ( mod: Module ) : HTMLElement {
       for (let p of n.points){
         if (p.logo) {
           let pos = roadmap.points[p.number]!
-          let el = mkSvg("text", pos.x, pos.y, p.logo)
+          let el = mkSvg("text", pos.x/ MAPSIZE, pos.y/MAPSIZE, p.logo)
           el.el.setAttribute("z-index", "1000")
           element.appendChild(el.el)
           hints.push(el.el)

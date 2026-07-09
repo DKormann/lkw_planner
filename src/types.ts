@@ -55,10 +55,10 @@ export function randomModule (
     roadmap,
     requests: Array.from({length:NREQS}, (_,i)=> ({
       id: randomUUID(),
-      deadline_h: (1+random()) * 80,
+      deadline_h: (1+random()) * 40,
       startPoint: randChoice(roadmap.range) as number,
       endPoint: randChoice(roadmap.range) as number,
-      value_eur: randInt(0, 1000),
+      value_eur: randInt(100, 400),
     }) as Request),
     startpositions: Array.from({length:NTRANS}, (_,i)=>randChoice(roadmap.range) as number),
   }
