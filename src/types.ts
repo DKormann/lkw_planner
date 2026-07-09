@@ -29,13 +29,6 @@ export const ScheduleItem = object({
 })
 export const Schedule = array(ScheduleItem)
 
-export const Module = object({
-
-  requests: array(Request),
-  transporters: array(Transporter),
-  schedule: Schedule,
-
-})
 
 export type Request = Infer<typeof Request>
 export type Transporter = Infer<typeof Transporter>
@@ -45,8 +38,8 @@ export type Schedule = Infer<typeof Schedule>
 
 
 export function randomModule (
-  NREQS = 40,
-  NTRANS = 10,
+  NREQS = 200,
+  NTRANS = 40,
   NPOINTS = 100,
   MAPSIZE = 400,
   seed = 22,
@@ -62,10 +55,10 @@ export function randomModule (
     roadmap,
     requests: Array.from({length:NREQS}, (_,i)=> ({
       id: randomUUID(),
-      "deadline_h" : randInt(0, Math.floor( random()* MAPSIZE*4)),
-      "startPoint": randChoice(roadmap.range) as number,
-      "endPoint": randChoice(roadmap.range) as number,
-      "value_eur": randInt(0, 1000),
+      deadline_h: (1+random()) * 80,
+      startPoint: randChoice(roadmap.range) as number,
+      endPoint: randChoice(roadmap.range) as number,
+      value_eur: randInt(0, 1000),
     }) as Request),
     startpositions: Array.from({length:NTRANS}, (_,i)=>randChoice(roadmap.range) as number),
   }
