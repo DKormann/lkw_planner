@@ -196,10 +196,13 @@ export function plannerView(mod: Module):HTMLElement{
       style({cursor:"pointer", border: "2px solid transparent", borderRadius:".2em", whiteSpace: "pre", fontFamily:"monospace"}),
       function(){
         popup(
-          p("no: ", item),
-          p(load ? "load" : load == false ? "unload" : "unassigned"),
-          p("value: ", req.value_eur + "€"),
-          p("dist: ", mod.roadmap.getCostN(req.startPoint, req.endPoint) + "km")
+          p("item ", item),
+          table(
+            tr(cell("status"), cell(load ? "load" : load == false ? "unload" : "unassigned")),
+            tr(cell("value"), cell(req.value_eur + "€")),
+            tr(cell("dist"), cell(mod.roadmap.getCostN(req.startPoint, req.endPoint) + "km")),
+            tr(cell("deadline"), cell(req.deadline_h.toFixed(2) + "h"))
+          )
         )
     })
 
