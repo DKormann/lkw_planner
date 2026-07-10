@@ -65,7 +65,7 @@ styl.innerHTML = `
 `
 document.head.appendChild(styl)
 
-export type htmlKey = 'innerText'|'onclick' | 'oninput' | 'onkeydown' | 'onmouseover' | 'onmouseexit' |'children'|'class'|'id'|'contentEditable'|'eventListeners'|'color'|'background' | 'style' | 'placeholder' | 'tabIndex' | 'colSpan' | 'type'
+export type htmlKey = 'innerText'|'onclick' | 'oninput' | 'onkeydown' | 'onmouseenter' | 'onmouseover' | 'onmouseexit' |'children'|'class'|'id'|'contentEditable'|'eventListeners'|'color'|'background' | 'style' | 'placeholder' | 'tabIndex' | 'colSpan' | 'type'
 export const htmlElement = (tag:string, text:string, args?:Partial<Record<htmlKey, any>>):HTMLElement =>{
 
   const _element = document.createElement(tag)
