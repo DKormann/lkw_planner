@@ -1,7 +1,7 @@
 
 
 import { randInt, random } from "../random"
-import { borderRadius, color, display, div, p, popup, pre, span, style, table, td, th, tr } from "../view/html"
+import { borderRadius, color, display, div, h2, h3, p, padding, popup, pre, span, style, table, td, th, tr } from "../view/html"
 import type { Module } from "../types"
 import { hightLights } from "../view/main"
 
@@ -187,41 +187,45 @@ export function plannerView(mod: Module):HTMLElement{
   const cellPadding = ".35em .5em"
   const scheduleCellMinHeight = "2.1em"
 
-  function itemButton (item:number){
-    let req = mod.requests[item]!
+  if (annealer == null) annealer = simpleAnnealing(mod)
 
+
+  function itemButton (item:number, load?: boolean){
+    let req = mod.requests[item]!
     let sp = span(item.toString().padStart(3,' '),
       style({cursor:"pointer", border: "2px solid transparent", borderRadius:".2em", whiteSpace: "pre", fontFamily:"monospace"}),
       function(){
         popup(
           p("no: ", item),
+          p(load ? "load" : load == false ? "unload" : "unassigned"),
           p("value: ", req.value_eur + "€"),
           p("dist: ", mod.roadmap.getCostN(req.startPoint, req.endPoint) + "km")
         )
     })
 
-    sp.onmouseenter = e=>{
+    let points =[{
+        number: req.startPoint,
+        logo: "📦"
+      }, {
+        number: req.endPoint,
+        logo: "🏠"
+      }]
 
+
+    if (load == true) points = [points[0]!]
+    if (load == false) points = [points[1]!]
+
+    sp.onmouseenter = e=>{
       sp.style.borderColor = color.green
-      hightLights.set([
-        {
-          points: [{
-            number: req.startPoint,
-            logo: "📦"
-          }, {
-            number: req.endPoint,
-            logo: "🏠"
-          }],
-        }
-      ])
+      hightLights.set([{points}])
     }
 
     sp.onmouseleave = e=> {sp.style.borderColor = "transparent"}
     return sp
   }
 
-  if (annealer == null) annealer = simpleAnnealing(mod)
 
+  const cell : typeof td = (...x) => td(style({border: outerBorder, padding: cellPadding, verticalAlign: "top"}), ...x)
 
   let tab = table(
     style({
@@ -237,7 +241,25 @@ export function plannerView(mod: Module):HTMLElement{
     mod.startpositions.map((start, tran)=>{
       return tr(
 
-        td(tran, style({border: outerBorder, padding: cellPadding, verticalAlign: "top"})),
+        td(
+          tran,
+          style({border: outerBorder, padding: cellPadding, verticalAlign: "top"}),
+          function(){
+            popup(
+              p("transporter: ", tran),
+              p("start: ", start),
+              p("score: ", annealer?.scheduleRatings[tran]!),
+              p("steps: ", annealer?.scheduleSizes[tran]!)
+
+            )
+          },
+          {
+            onmouseenter: e=>{
+              console.log(tran)
+              hightLights.set([{points:[{number:start, logo:"🚚"}]}])
+            }
+          }
+        ),
         td(annealer?.scheduleRatings[tran]!, style({border: outerBorder, padding: cellPadding, verticalAlign: "top"})),
         table(
           style({
@@ -248,7 +270,7 @@ export function plannerView(mod: Module):HTMLElement{
             Array.from({length: annealer!.scheduleSizes[tran]!}, (_,i)=>{
               let step = annealer?.schedule[tran* annealer.TSIZE + i]!
               return td(
-                (getDeck(step) == deck) ? itemButton(getReq(step)) : "",
+                (getDeck(step) == deck) ? itemButton(getReq(step) , isload(step) ? true : false ) : "",
                 style({
                   color: isload(step) ? color.blue : color.green,
                   border: innerBorder,
@@ -270,8 +292,11 @@ export function plannerView(mod: Module):HTMLElement{
     })
   )
 
+
+
   
   return div(
+
     style({
       padding: "1em",
       overflowY: "auto",
@@ -288,8 +313,47 @@ export function plannerView(mod: Module):HTMLElement{
       }),
       tab
     ),
-    p("unassigned: ", Array.from(annealer.unassigned).map((x,i)=>({x,i})).filter(x=>x.x).map(x=>span(" ", itemButton(x.i)))),
-    p("search time: ", time, "ms"),
-    p("score:", annealer.scheduleRatings.reduce((x,y)=>x+y))
+
+    div(
+      h3("parameters"),
+      table(
+        style({
+          borderCollapse: "collapse",
+        }),
+        tr(
+          cell("unassigned requests"),
+          cell(Array.from(annealer.unassigned).map((x,i)=>({x,i})).filter(x=>x.x).map(x=>span(" ", itemButton(x.i)))),
+        ),
+        tr(
+          cell("search time"),
+          cell(time + "ms")
+        ),
+        tr(
+          cell("score"),
+          cell(annealer.scheduleRatings.reduce((x,y)=>x+y, 0))
+        ),
+        tr(
+          cell("transporter count"),
+          cell(mod.NTRANS)
+        ),
+        tr(
+          cell("request count"),
+          cell(mod.NREQS)
+        ),
+        tr(
+          cell("cost per km"),
+          cell(KM_COST + "€")
+        ),
+        tr(
+          cell("average speed"),
+          cell(AVG_SPEED_KMH + "km/h")
+        ),
+        tr(
+          cell("reorganization cost"),
+          cell(REORG_COST_EUR + "€")
+        )
+      )
+    ),
+
   )
 }
