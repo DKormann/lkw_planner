@@ -3,13 +3,13 @@ import { body, h2 } from "./html";
 
 
 
-let adder = instance.instance.exports.add as (a:number, b:number)=>number
-
-console.log(adder(2,3))
+let res = instance.add!(2,3)
+let even = instance.isEven!(8)
+let odd = instance.isOdd!(9)
 
 
 body.append(
   h2(
-    "wasm baseline"
+    "wasm baseline: ", String(res), " even(8): ", String(even), " odd(9): ", String(odd)
   )
 )
