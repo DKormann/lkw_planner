@@ -25,11 +25,7 @@ export function randomMap (NPOINTS:number, MAPSIZE:number){
     return roads[roadIDX(a,b)]!
   }
 
-  let rods: {a:number,b:number, dist:number}[] = []
-
   function setroad (a: number, b: number, dist: number) {
-
-    rods.push({a,b,dist})
     if (a==b) throw new Error("Cannot set road from a point to itself")
     roads[roadIDX(a,b)] = dist
   }
@@ -40,24 +36,42 @@ export function randomMap (NPOINTS:number, MAPSIZE:number){
     points.map((p2, i2)=>  ({d: Math.floor(Math.hypot(ps.x - p2.x, ps.y - p2.y)), i: i2}))
     .filter(x => x.i != i) .sort((a,b)=> a.d - b.d) )
 
-
-  let found = new Set<number>([0])
-  function find(x:number){
-
-    if (found.has(x)) return
-    found.add(x)
-    range.forEach((p,i)=>{
-      if ( i!=x && getroad(i, x) != 0) find(i)
-    })
+  function connect(a: number, b: number, dist: number){
+    if (a === b) return
+    if (getroad(a, b) !== 0) return
+    setroad(a, b, dist)
   }
 
+  // Build a connected backbone by repeatedly attaching the nearest unconnected point.
+  const connected = new Set<number>([0])
+  while (connected.size < NPOINTS){
+    let bestA = -1
+    let bestB = -1
+    let bestD = Infinity
+
+    for (const a of connected){
+      for (const nei of neighs[a] ?? []){
+        if (connected.has(nei.i)) continue
+        if (nei.d < bestD){
+          bestA = a
+          bestB = nei.i
+          bestD = nei.d
+        }
+      }
+    }
+
+    if (bestA === -1 || bestB === -1) throw new Error("Failed to connect random map")
+    connect(bestA, bestB, bestD)
+    connected.add(bestB)
+  }
+
+  // Add a few extra local roads so the map is not just a tree.
   for (let x = 0; x < NPOINTS; x++){
-    for (let i = 0; i < 4; i++){
-      let x = randInt(0, NPOINTS)
-      let nx = neighs[x]?.[i]!
-      setroad(x, nx.i, nx.d)
-      if (found.has(x)) find(nx.i)
-      if (found.has(nx.i)) find(x)
+    const extraEdges = 2 + randInt(0, 3)
+    for (let i = 0; i < extraEdges; i++){
+      const nx = neighs[x]?.[i]
+      if (!nx) continue
+      connect(x, nx.i, nx.d)
     }
   }
 
@@ -151,5 +165,4 @@ export function randomMap (NPOINTS:number, MAPSIZE:number){
 
 
 export type RoadMap = typeof randomMap extends (...x:any) => (infer T) ? T : never
-
 
