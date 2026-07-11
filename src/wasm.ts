@@ -11,11 +11,18 @@ type Value<T extends NumType> = T extends "i64" ? bigint : number
 export type FuncSig<Args extends readonly NumType[], Ret extends NumType> = { params: Args, result: Ret }
 type ArgsExpr<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? Expr<Args[K]> : never }
 type ArgsVal<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? Value<Args[K]> : never }
-type ExprLike<T extends NumType> = Expr<T> | Value<T>
+export type LocalVar<T extends NumType> = {
+  id: number
+  type: T
+  get(): Expr<T>
+  set(value: ExprLike<T>): Stmt
+}
+type ExprLike<T extends NumType> = Expr<T> | Value<T> | LocalVar<T>
+type FuncBody<R extends NumType> = Expr<R> | Stmt[]
 
 type CoreExpr<T extends NumType> =
   | { kind: "const", type: T, value: Value<T> }
-  | { kind: "local.get", type: T, index: number }
+  | { kind: "local.get", type: T, local: number }
   | { kind: "bin", type: T, op: BinOp, left: Expr<T>, right: Expr<T> }
   | { kind: "call", type: T, target: number, args: Expr<NumType>[] }
   | { kind: "if", type: T, cond: Expr<"i32">, then: Expr<T>, else: Expr<T> }
@@ -31,17 +38,24 @@ export type Expr<T extends NumType> = CoreExpr<T> & {
   gt(right: ExprLike<T>): Expr<"i32">
 }
 
+export type Stmt =
+  | { kind: "local.set", local: number, type: NumType, value: Expr<NumType> }
+  | { kind: "if", cond: Expr<"i32">, then: Stmt[], else: Stmt[] }
+  | { kind: "while", cond: Expr<"i32">, body: Stmt[] }
+  | { kind: "return", value: Expr<NumType> }
+  | { kind: "expr", expr: Expr<NumType> }
+
 type FuncImpl<S extends FuncSig<readonly NumType[], NumType>> = { params: S["params"], result: S["result"], body: Expr<S["result"]> }
 export type FuncHandle<A extends readonly NumType[], R extends NumType> = FuncSig<A, R> & {
   id: number
-  build?: (...args: readonly Expr<NumType>[]) => Expr<R>
+  build?: (...args: readonly Expr<NumType>[]) => FuncBody<R>
   call: (...args: ArgsExpr<A>) => Expr<R>
 }
 type AnyFunc = {
   id: number
   params: readonly NumType[]
   result: NumType
-  build?: (...args: readonly Expr<NumType>[]) => Expr<NumType>
+  build?: (...args: readonly Expr<NumType>[]) => FuncBody<NumType>
   call: (...args: any[]) => Expr<NumType>
 }
 type ModuleDefs = Record<string, AnyFunc>
@@ -107,6 +121,7 @@ const str = (s: string) => {
 
 const section = (id: number, payload: number[]) => [id, ...u32(payload.length), ...payload]
 const die = (x: unknown): never => { throw new Error(`Unexpected value: ${String(x)}`) }
+const flatMap = <T, R>(xs: T[], fn: (x: T) => R[]): R[] => xs.flatMap(fn)
 
 const expr = <T extends NumType>(node: CoreExpr<T>): Expr<T> => {
   const e = node as Expr<T>
@@ -120,10 +135,13 @@ const expr = <T extends NumType>(node: CoreExpr<T>): Expr<T> => {
   return e
 }
 
-const lit = <T extends NumType>(type: T, value: ExprLike<T>): Expr<T> =>
-  typeof value === "object" && value !== null && "kind" in value
-    ? value as Expr<T>
-    : expr({ kind: "const", type, value: value as Value<T> })
+const lit = <T extends NumType>(type: T, value: ExprLike<T>): Expr<T> => {
+  if (typeof value === "object" && value !== null) {
+    if ("kind" in value) return value as Expr<T>
+    if ("get" in value) return value.get()
+  }
+  return expr({ kind: "const", type, value: value as Value<T> })
+}
 
 const bin = <T extends NumType>(op: BinOp, left: Expr<T>, right: ExprLike<T>) =>
   expr({ kind: "bin", type: left.type, op, left, right: lit(left.type, right) })
@@ -148,10 +166,12 @@ export const f32 = (n: number) => expr({ kind: "const", type: "f32", value: n })
 export const f64 = (n: number) => expr({ kind: "const", type: "f64", value: n })
 
 let nextFuncId = 0
+let nextLocalId = 0
+const localExpr = <T extends NumType>(type: T, local: number) => expr({ kind: "local.get", type, local })
 const mkHandle = <A extends readonly NumType[], R extends NumType>(
   params: A,
   result: R,
-  build?: (...args: readonly Expr<NumType>[]) => Expr<R>,
+  build?: (...args: readonly Expr<NumType>[]) => FuncBody<R>,
 ): FuncHandle<A, R> => {
   const id = nextFuncId++
   return {
@@ -169,9 +189,76 @@ export const declare = <A extends readonly NumType[], R extends NumType>(params:
 export const func = <const A extends readonly NumType[], R extends NumType>(
   params: A,
   result: R,
-  build: (...args: ArgsExpr<A>) => Expr<R>,
-) => mkHandle(params, result, build as (...args: readonly Expr<NumType>[]) => Expr<R>)
+  build: (...args: ArgsExpr<A>) => FuncBody<R>,
+) => mkHandle(params, result, build as (...args: readonly Expr<NumType>[]) => FuncBody<R>)
 
+type RetLike<T extends NumType> = ExprLike<T>
+
+const mkLocal = <T extends NumType>(type: T): LocalVar<T> => {
+  const id = nextLocalId++
+  return {
+    id,
+    type,
+    get: () => localExpr(type, id),
+    set: value => ({ kind: "local.set", local: id, type, value: lit(type, value) as Expr<NumType> }),
+  }
+}
+
+export const local = {
+  i32: () => mkLocal("i32"),
+  i64: () => mkLocal("i64"),
+  f32: () => mkLocal("f32"),
+  f64: () => mkLocal("f64"),
+}
+
+const asRetExpr = <T extends NumType>(value: RetLike<T>): Expr<T> =>
+  lit(typeof value === "object" && value !== null && "type" in value ? value.type as T : "i32" as T, value)
+
+export const ret = <T extends NumType>(value: RetLike<T>): Stmt => ({
+  kind: "return",
+  value: asRetExpr(value) as Expr<NumType>,
+})
+
+export const ifStmt = (cond: Expr<"i32">, then: Stmt[], else_: Stmt[] = []): Stmt => ({ kind: "if", cond, then, else: else_ })
+export const whileLoop = (cond: Expr<"i32">, body: Stmt[]): Stmt => ({ kind: "while", cond, body })
+export const exprStmt = <T extends NumType>(value: Expr<T>): Stmt => ({ kind: "expr", expr: value as Expr<NumType> })
+
+const collectLocalsExpr = (e: Expr<NumType>, out: Map<number, NumType>) => {
+  switch (e.kind) {
+    case "const":
+      return
+    case "local.get":
+      out.set(e.local, e.type)
+      return
+    case "bin":
+      collectLocalsExpr(e.left, out); collectLocalsExpr(e.right, out); return
+    case "cmp":
+      collectLocalsExpr(e.left, out); collectLocalsExpr(e.right, out); return
+    case "call":
+      e.args.forEach(arg => collectLocalsExpr(arg, out)); return
+    case "if":
+      collectLocalsExpr(e.cond, out); collectLocalsExpr(e.then, out); collectLocalsExpr(e.else, out); return
+    default:
+      return die(e)
+  }
+}
+
+const collectLocalsStmt = (s: Stmt, out: Map<number, NumType>) => {
+  switch (s.kind) {
+    case "local.set":
+      out.set(s.local, s.type); collectLocalsExpr(s.value, out); return
+    case "if":
+      collectLocalsExpr(s.cond, out); s.then.forEach(x => collectLocalsStmt(x, out)); s.else.forEach(x => collectLocalsStmt(x, out)); return
+    case "while":
+      collectLocalsExpr(s.cond, out); s.body.forEach(x => collectLocalsStmt(x, out)); return
+    case "return":
+      collectLocalsExpr(s.value, out); return
+    case "expr":
+      collectLocalsExpr(s.expr, out); return
+    default:
+      return die(s)
+  }
+}
 
 const compileExpr = (e: Expr<NumType>, ix: Record<number, number>): number[] => {
   switch (e.kind) {
@@ -181,7 +268,7 @@ const compileExpr = (e: Expr<NumType>, ix: Record<number, number>): number[] => 
       if (e.type === "f32") return [0x43, ...fN(e.value as number, 4)]
       if (e.type === "f64") return [0x44, ...fN(e.value as number, 8)]
       return die(e)
-    case "local.get": return [0x20, ...u32(e.index)]
+    case "local.get": return [0x20, ...u32(ix[e.local]!)]
     case "bin": return [...compileExpr(e.left, ix), ...compileExpr(e.right, ix), codes.bin[e.op][e.type]]
     case "cmp": return [...compileExpr(e.left, ix), ...compileExpr(e.right, ix), codes.cmp[e.op][e.inputType]]
     case "call":
@@ -192,9 +279,26 @@ const compileExpr = (e: Expr<NumType>, ix: Record<number, number>): number[] => 
   }
 }
 
+const compileStmt = (s: Stmt, ix: Record<number, number>): number[] => {
+  switch (s.kind) {
+    case "local.set":
+      return [...compileExpr(s.value, ix), 0x21, ...u32(ix[s.local]!)]
+    case "if":
+      return [...compileExpr(s.cond, ix), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, ix)), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, ix))] : []), 0x0b]
+    case "while":
+      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, ix), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, ix)), 0x0c, ...u32(0), 0x0b, 0x0b]
+    case "return":
+      return [...compileExpr(s.value, ix), 0x0f]
+    case "expr":
+      return [...compileExpr(s.expr, ix), 0x1a]
+    default:
+      return die(s)
+  }
+}
+
 export const compileModule = <T extends ModuleDefs>(defs: T) => {
   const entries = Object.entries(defs) as [keyof T & string, T[keyof T]][]
-  const ix = Object.fromEntries(entries.map(([, def], i) => [def.id, i])) as Record<number, number>
+  const fx = Object.fromEntries(entries.map(([, def], i) => [def.id, i])) as Record<number, number>
   return new Uint8Array([
     ...magic,
     ...section(0x01, [...u32(entries.length), ...entries.flatMap(([, f]) => [0x60, ...u32(f.params.length), ...f.params.map(t => codes.type[t]), 0x01, codes.type[f.result]])]),
@@ -202,8 +306,17 @@ export const compileModule = <T extends ModuleDefs>(defs: T) => {
     ...section(0x07, [...u32(entries.length), ...entries.flatMap(([name], i) => [...str(name), 0x00, ...u32(i)])]),
     ...section(0x0a, [...u32(entries.length), ...entries.flatMap(([, f]) => {
       if (!f.build) throw new Error(`Function ${f.id} has no implementation`)
-      const locals = f.params.map((type, index) => expr({ kind: "local.get", type, index })) as Expr<NumType>[]
-      const body = [0x00, ...compileExpr(f.build(...locals), ix), 0x0b]
+      const params = f.params.map(type => localExpr(type, nextLocalId++)) as Expr<NumType>[]
+      const paramIds = params.map(p => p.kind === "local.get" ? p.local : -1)
+      const built = f.build(...params)
+      const locals = new Map<number, NumType>()
+      Array.isArray(built) ? built.forEach(s => collectLocalsStmt(s, locals)) : collectLocalsExpr(built, locals)
+      paramIds.forEach(id => locals.delete(id))
+      const localEntries = [...locals.entries()]
+      const lx = Object.fromEntries([...paramIds.map((id, i) => [id, i]), ...localEntries.map(([id], i) => [id, f.params.length + i])]) as Record<number, number>
+      const decls = [ ...flatMap(localEntries, ([, type]) => [...u32(1), codes.type[type]]) ]
+      const code = Array.isArray(built) ? flatMap(built, s => compileStmt(s, lx)) : compileExpr(built, lx)
+      const body = [...u32(localEntries.length), ...decls, ...code, 0x0b]
       return [...u32(body.length), ...body]
     })]),
   ])
@@ -211,4 +324,3 @@ export const compileModule = <T extends ModuleDefs>(defs: T) => {
 
 export const compile = async <T extends ModuleDefs>(defs: T) =>
   (await WebAssembly.instantiate(await WebAssembly.compile(Uint8Array.from(compileModule(defs)).buffer))).exports as ExportBundle<T>
-
