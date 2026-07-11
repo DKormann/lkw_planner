@@ -9,7 +9,6 @@ export type CmpOp = "eq" | "lt" | "gt"
 type Value<T extends NumType> = T extends "i64" ? bigint : number
 
 export type FuncSig<Args extends readonly NumType[], Ret extends NumType> = { params: Args, result: Ret }
-type Sigs = Record<string, FuncSig<readonly NumType[], NumType>>
 type ArgsExpr<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? Expr<Args[K]> : never }
 type ArgsVal<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? Value<Args[K]> : never }
 type ExprLike<T extends NumType> = Expr<T> | Value<T>
@@ -18,7 +17,7 @@ type CoreExpr<T extends NumType> =
   | { kind: "const", type: T, value: Value<T> }
   | { kind: "local.get", type: T, index: number }
   | { kind: "bin", type: T, op: BinOp, left: Expr<T>, right: Expr<T> }
-  | { kind: "call", type: T, name: string, args: Expr<NumType>[] }
+  | { kind: "call", type: T, target: number, args: Expr<NumType>[] }
   | { kind: "if", type: T, cond: Expr<"i32">, then: Expr<T>, else: Expr<T> }
   | (T extends "i32" ? { kind: "cmp", type: "i32", inputType: NumType, op: CmpOp, left: Expr<NumType>, right: Expr<NumType> } : never)
 
@@ -33,11 +32,23 @@ export type Expr<T extends NumType> = CoreExpr<T> & {
 }
 
 type FuncImpl<S extends FuncSig<readonly NumType[], NumType>> = { params: S["params"], result: S["result"], body: Expr<S["result"]> }
-type ModuleImpl<T extends Sigs> = { [K in keyof T]: FuncImpl<T[K]> }
-export type ExportBundle<T extends Sigs> = { [K in keyof T]-?: (...args: ArgsVal<T[K]["params"]>) => Value<T[K]["result"]> }
-type FuncFactory<A extends readonly NumType[], R extends NumType> = { __fn: true, params: A, result: R, build: (...args: readonly Expr<NumType>[]) => Expr<R> }
-type ModuleDecl<T extends Sigs> = { [K in keyof T]-?: FuncFactory<T[K]["params"], T[K]["result"]> }
-type ModuleBuilder<T extends Sigs> = { func<A extends readonly NumType[], R extends NumType>(a: A, r: R, fn: (...x: ArgsExpr<A>) => Expr<R>): FuncFactory<A, R> } & { [K in keyof T]-?: (...args: ArgsExpr<T[K]["params"]>) => Expr<T[K]["result"]> }
+export type FuncHandle<A extends readonly NumType[], R extends NumType> = FuncSig<A, R> & {
+  id: number
+  build?: (...args: readonly Expr<NumType>[]) => Expr<R>
+  call: (...args: ArgsExpr<A>) => Expr<R>
+}
+type AnyFunc = {
+  id: number
+  params: readonly NumType[]
+  result: NumType
+  build?: (...args: readonly Expr<NumType>[]) => Expr<NumType>
+  call: (...args: any[]) => Expr<NumType>
+}
+type ModuleDefs = Record<string, AnyFunc>
+type SigOf<F extends AnyFunc> = FuncSig<F["params"], F["result"]>
+type ModuleSigs<T extends ModuleDefs> = { [K in keyof T]: SigOf<T[K]> }
+type ModuleImpl<T extends ModuleDefs> = { [K in keyof T]: FuncImpl<SigOf<T[K]>> }
+export type ExportBundle<T extends ModuleDefs> = { [K in keyof T]-?: (...args: ArgsVal<T[K]["params"]>) => Value<T[K]["result"]> }
 
 const codes = {
   type: { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c } as Record<NumType, number>,
@@ -136,8 +147,33 @@ export const i64 = (n: bigint) => expr({ kind: "const", type: "i64", value: n })
 export const f32 = (n: number) => expr({ kind: "const", type: "f32", value: n })
 export const f64 = (n: number) => expr({ kind: "const", type: "f64", value: n })
 
+let nextFuncId = 0
+const mkHandle = <A extends readonly NumType[], R extends NumType>(
+  params: A,
+  result: R,
+  build?: (...args: readonly Expr<NumType>[]) => Expr<R>,
+): FuncHandle<A, R> => {
+  const id = nextFuncId++
+  return {
+    id,
+    params,
+    result,
+    build,
+    call: (...args: ArgsExpr<A>) => expr({ kind: "call", type: result, target: id, args: args as Expr<NumType>[] }) as Expr<R>,
+  }
+}
 
-const compileExpr = (e: Expr<NumType>, ix: Record<string, number>): number[] => {
+export const declare = <A extends readonly NumType[], R extends NumType>(params: A, result: R) =>
+  mkHandle(params, result)
+
+export const func = <const A extends readonly NumType[], R extends NumType>(
+  params: A,
+  result: R,
+  build: (...args: ArgsExpr<A>) => Expr<R>,
+) => mkHandle(params, result, build as (...args: readonly Expr<NumType>[]) => Expr<R>)
+
+
+const compileExpr = (e: Expr<NumType>, ix: Record<number, number>): number[] => {
   switch (e.kind) {
     case "const":
       if (e.type === "i32") return [0x41, ...sN(e.value as number, 32)]
@@ -149,66 +185,30 @@ const compileExpr = (e: Expr<NumType>, ix: Record<string, number>): number[] => 
     case "bin": return [...compileExpr(e.left, ix), ...compileExpr(e.right, ix), codes.bin[e.op][e.type]]
     case "cmp": return [...compileExpr(e.left, ix), ...compileExpr(e.right, ix), codes.cmp[e.op][e.inputType]]
     case "call":
-      if (ix[e.name] == null) throw new Error(`Unknown function ${e.name}`)
-      return [...e.args.flatMap(arg => compileExpr(arg, ix)), 0x10, ...u32(ix[e.name]!)]
+      if (ix[e.target] == null) throw new Error(`Unknown function ${e.target}`)
+      return [...e.args.flatMap(arg => compileExpr(arg, ix)), 0x10, ...u32(ix[e.target]!)]
     case "if": return [...compileExpr(e.cond, ix), 0x04, codes.type[e.type], ...compileExpr(e.then, ix), 0x05, ...compileExpr(e.else, ix), 0x0b]
     default: return die(e)
   }
 }
 
-export const compileModule = <T extends Sigs>(functions: ModuleImpl<T>) => {
-  const entries = Object.entries(functions) as [keyof T & string, ModuleImpl<T>[keyof T]][]
-  const ix = Object.fromEntries(entries.map(([name], i) => [name, i])) as Record<string, number>
+export const compileModule = <T extends ModuleDefs>(defs: T) => {
+  const entries = Object.entries(defs) as [keyof T & string, T[keyof T]][]
+  const ix = Object.fromEntries(entries.map(([, def], i) => [def.id, i])) as Record<number, number>
   return new Uint8Array([
     ...magic,
     ...section(0x01, [...u32(entries.length), ...entries.flatMap(([, f]) => [0x60, ...u32(f.params.length), ...f.params.map(t => codes.type[t]), 0x01, codes.type[f.result]])]),
     ...section(0x03, [...u32(entries.length), ...entries.flatMap((_, i) => u32(i))]),
     ...section(0x07, [...u32(entries.length), ...entries.flatMap(([name], i) => [...str(name), 0x00, ...u32(i)])]),
-    ...section(0x0a, [...u32(entries.length), ...entries.flatMap(([, f]) => { const body = [0x00, ...compileExpr(f.body as Expr<NumType>, ix), 0x0b]; return [...u32(body.length), ...body] })]),
+    ...section(0x0a, [...u32(entries.length), ...entries.flatMap(([, f]) => {
+      if (!f.build) throw new Error(`Function ${f.id} has no implementation`)
+      const locals = f.params.map((type, index) => expr({ kind: "local.get", type, index })) as Expr<NumType>[]
+      const body = [0x00, ...compileExpr(f.build(...locals), ix), 0x0b]
+      return [...u32(body.length), ...body]
+    })]),
   ])
 }
 
-export const instantiateModule = async <T extends Sigs>(mod: ModuleImpl<T>) =>
-  (await WebAssembly.instantiate(await WebAssembly.compile(Uint8Array.from(compileModule(mod)).buffer))).exports as ExportBundle<T>
+export const compile = async <T extends ModuleDefs>(defs: T) =>
+  (await WebAssembly.instantiate(await WebAssembly.compile(Uint8Array.from(compileModule(defs)).buffer))).exports as ExportBundle<T>
 
-export async function mkModule<T extends Sigs>(build: (m: ModuleBuilder<T>) => ModuleDecl<T>): Promise<ExportBundle<T>> {
-  const builder = new Proxy({
-    func<A extends readonly NumType[], R extends NumType>(params: A, result: R, fn: (...args: ArgsExpr<A>) => Expr<R>) {
-      return { __fn: true as const, params, result, build: fn as (...args: readonly Expr<NumType>[]) => Expr<R> }
-    },
-  }, {
-    get(target, prop, receiver) {
-      if (prop in target) return Reflect.get(target, prop, receiver)
-      return (...args: Expr<NumType>[]) => expr({ kind: "call", type: sigs[prop as string]!.result, name: prop as string, args }) as Expr<NumType>
-    },
-  }) as ModuleBuilder<T>
-
-  const decls = build(builder)
-  const sigs = Object.fromEntries(
-    Object.entries(decls).map(([name, def]) => {
-      return [name, { params: def.params, result: def.result }]
-    }),
-  ) as T
-
-  const impl = Object.fromEntries(
-    Object.entries(decls).map(([name, def]) => {
-      const locals = def.params.map((type: NumType, index: number) => expr({ kind: "local.get", type, index })) as unknown as ArgsExpr<typeof def.params>
-      return [name, { params: def.params, result: def.result, body: def.build(...locals as unknown as Expr<NumType>[]) }]
-    }),
-  ) as ModuleImpl<T>
-
-  return instantiateModule(impl)
-}
-
-const mod = await mkModule(m => ({
-  add: m.func(['i32', 'i32'] as const, 'i32', (x, y) => x.add(y)),
-  isEven: m.func(['i32'] as const, 'i32', n =>
-    ifElse(n.eq(0), i32(1), m.isOdd!(n.sub(1)))
-  ),
-  isOdd: m.func(['i32'] as const, 'i32', n =>
-    ifElse(n.eq(0), i32(0), m.isEven!(n.sub(1)))
-  ),
-
-}))
-
-export const instance = mod
