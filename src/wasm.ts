@@ -108,7 +108,7 @@ type AnyArray = {
   store(index: ExprLike<"i32">, value: ExprLike<NumType>): Stmt
 }
 
-type ModuleDef = Record<string, AnyFunc | AnyArray>
+export type ModuleDef = Record<string, AnyFunc | AnyArray>
 type FuncDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyFunc ? K : never]: Extract<T[K], AnyFunc> }
 type ArrayDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyArray ? K : never]: Extract<T[K], AnyArray> }
 export type CompileResult<T extends ModuleDef> = {
@@ -116,6 +116,8 @@ export type CompileResult<T extends ModuleDef> = {
     T[K] extends AnyFunc ? (...args: ArgsVal<T[K]["params"]>) => Value<T[K]["result"]>
     : T[K] extends AnyArray ? TypedArrayFor<T[K]["type"]>
     : never
+} & {
+  mod: WebAssembly.Instance
 }
 
 const codes = {
@@ -561,7 +563,8 @@ const typedArrayCtor = <T extends NumType>(type: T): { new(buffer: ArrayBufferLi
 export const compile = async <T extends ModuleDef>(mod: T): Promise<CompileResult<T>> => {
   const analysis = analyzeModule(mod)
   const { funcs, arrays, layouts } = analysis
-  const wasm = await WebAssembly.instantiate(await WebAssembly.compile(emitModule(analysis).buffer))
+  let compiled = await WebAssembly.compile(emitModule(analysis).buffer)
+  const wasm = await WebAssembly.instantiate(compiled)
   const exports = wasm.exports as WebAssembly.Exports & { __mem: WebAssembly.Memory }
   const jsFuncs = Object.fromEntries(Object.keys(funcs).map(name => [name, exports[name]]))
   const jsArrays = (Object.entries(arrays) as [string, AnyArray][]).map(([name, arr]) => {
@@ -572,5 +575,6 @@ export const compile = async <T extends ModuleDef>(mod: T): Promise<CompileResul
   return Object.fromEntries([
     ...Object.entries(jsFuncs),
     ...jsArrays,
+    ["mod", compiled]
   ]) as CompileResult<T>
 }

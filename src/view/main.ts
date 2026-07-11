@@ -1,11 +1,11 @@
 import { array, compile, func, i32, local, ret, whileLoop } from "../wasm";
 import { body, h2, p } from "./html";
+import { mkWorker } from "./planner";
+
 
 const xs = array("i32", 1024)
 const ys = array("i32", 1024)
 const out = array("i32", 1024)
-
-const u = array("i32", 10)
 
 const sumInto = func(["i32"], "i32", n => {
   const i = local.i32()
@@ -18,7 +18,6 @@ const sumInto = func(["i32"], "i32", n => {
     ret(0),
   ]
 })
-
 
 const mod = await compile({
   sumInto,
@@ -46,5 +45,4 @@ body.append(
 )
 
 
-
-
+let w = await mkWorker()

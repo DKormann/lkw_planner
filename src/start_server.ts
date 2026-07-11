@@ -1,4 +1,5 @@
 import {stat, readdir, writeFile} from "fs/promises"
+import { project_name } from "./settings"
 
 const argv = process.argv.slice(2)
 let devVersion = 0
@@ -51,7 +52,11 @@ argv.forEach((arg, i)=>{
 Bun.serve({
   port,
   async fetch(req){
+    console.log("Request:", req.method, req.url)
     let path = req.url.split("/").filter(x=>x.length>0).slice(2)
+    if (path.length == 0) return new Response(null, {status: 302, headers: {"Location": `/${project_name}/`}})
+    if (path[0] != project_name) return new Response("Not found", {status: 404})
+      path = path.slice(1)
     if (path[0] == "version") return new Response(String(devVersion))
     if (path.length == 0) return new Response(await Bun.file("./index.html").bytes(), {headers: {"Content-Type": "text/html"}})
     return new Response(await Bun.file("./index.js").bytes(), {headers: {"Content-Type": "application/javascript"}})
@@ -60,4 +65,4 @@ Bun.serve({
 })
 
 
-console.log(`Server running at http://localhost:${port}`)
+console.log(`Server running at http://localhost:${port}/${project_name}`)
