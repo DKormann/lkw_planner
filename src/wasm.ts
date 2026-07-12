@@ -117,7 +117,8 @@ export type CompileResult<T extends ModuleDef> = {
     : T[K] extends AnyArray ? TypedArrayFor<T[K]["type"]>
     : never
 } & {
-  mod: WebAssembly.Instance
+  mod: WebAssembly.Module
+  memory: WebAssembly.Memory
 }
 
 const codes = {
@@ -338,6 +339,10 @@ type ModuleAnalysis<T extends ModuleDef> = {
   pages: number
 }
 
+type CompileOptions = {
+  shared?: boolean
+}
+
 const walkExpr = (e: Expr<NumType>, fns: {
   local?: (id: number, type: NumType) => void
   array?: (id: number) => void
@@ -517,19 +522,23 @@ const analyzeModule = <T extends ModuleDef>(mod: T) => {
   return { funcs, arrays, fEntries, builtFuncs, fix, layouts, pages: Math.max(1, Math.ceil(bytes / 65536)) } as ModuleAnalysis<T>
 }
 
-const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, pages }: ModuleAnalysis<T>) => {
+const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, pages }: ModuleAnalysis<T>, { shared = false }: CompileOptions = {}) => {
   const functionSection = fEntries.flatMap((_, i) => u32(i))
   const exportSection = fEntries.flatMap(([name], i) => [...str(name), 0x00, ...u32(i)])
   return new Uint8Array([
     ...magic,
     ...section(0x01, [...u32(fEntries.length), ...flatMap(fEntries, ([, f]) => [0x60, ...u32(f.params.length), ...f.params.map(t => codes.type[t]), 0x01, codes.type[f.result]])]),
-    ...section(0x03, [...u32(fEntries.length), ...functionSection]),
-    ...section(0x05, [0x01, 0x00, ...u32(pages)]),
-    ...section(0x07, [
-      ...u32(fEntries.length + 1),
-      ...exportSection,
-      ...str("__mem"), 0x02, ...u32(0),
+    ...section(0x02, [
+      0x01,
+      ...str("env"),
+      ...str("memory"),
+      0x02,
+      shared ? 0x03 : 0x01,
+      ...u32(pages),
+      ...u32(pages),
     ]),
+    ...section(0x03, [...u32(fEntries.length), ...functionSection]),
+    ...section(0x07, [...u32(fEntries.length), ...exportSection]),
     ...section(0x0a, [
       ...u32(fEntries.length),
       ...flatMap(builtFuncs, ({ func, paramIds, built }) => {
@@ -548,7 +557,7 @@ const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, p
   ])
 }
 
-export const compileModule = <T extends ModuleDef>(mod: T) => emitModule(analyzeModule(mod))
+export const compileModule = <T extends ModuleDef>(mod: T, opts?: CompileOptions) => emitModule(analyzeModule(mod), opts)
 
 const typedArrayCtor = <T extends NumType>(type: T): { new(buffer: ArrayBufferLike, byteOffset: number, length: number): TypedArrayFor<T> } => {
   switch (type) {
@@ -560,21 +569,23 @@ const typedArrayCtor = <T extends NumType>(type: T): { new(buffer: ArrayBufferLi
   }
 }
 
-export const compile = async <T extends ModuleDef>(mod: T): Promise<CompileResult<T>> => {
+export const compile = async <T extends ModuleDef>(mod: T, opts: CompileOptions = {}): Promise<CompileResult<T>> => {
   const analysis = analyzeModule(mod)
   const { funcs, arrays, layouts } = analysis
-  let compiled = await WebAssembly.compile(emitModule(analysis).buffer)
-  const wasm = await WebAssembly.instantiate(compiled)
-  const exports = wasm.exports as WebAssembly.Exports & { __mem: WebAssembly.Memory }
+  const memory = new WebAssembly.Memory({ initial: analysis.pages, maximum: analysis.pages, shared: !!opts.shared })
+  let compiled = await WebAssembly.compile(emitModule(analysis, opts).buffer)
+  const wasm = await WebAssembly.instantiate(compiled, { env: { memory } })
+  const exports = wasm.exports as WebAssembly.Exports
   const jsFuncs = Object.fromEntries(Object.keys(funcs).map(name => [name, exports[name]]))
   const jsArrays = (Object.entries(arrays) as [string, AnyArray][]).map(([name, arr]) => {
     const layout = layouts[arr.id]!
     const Ctor = typedArrayCtor(arr.type)
-    return [name, new Ctor(exports.__mem.buffer, layout.offset, arr.length)] as const
+    return [name, new Ctor(memory.buffer, layout.offset, arr.length)] as const
   })
   return Object.fromEntries([
     ...Object.entries(jsFuncs),
     ...jsArrays,
-    ["mod", compiled]
+    ["mod", compiled],
+    ["memory", memory],
   ]) as CompileResult<T>
 }
