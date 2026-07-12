@@ -1,7 +1,7 @@
 import { hash } from "../hash";
 import { body, button, color, div, errorpopup, h1, h2, h3, input, margin, p, padding, popup, pre, span, style, table, width, textarea, a, border, html, th, tr, td, borderRadius, panelList, display, background } from "./html";
 import { mapView } from "./mapView";
-import { randomMap } from "../randomMap";
+import { randomMap } from "../roadmap";
 import { randomModule, randomUUID, Request, Schedule, UUID } from "../types";
 import { mkStored, mkWritable, type Writable } from "../writeable";
 import { randChoice, random, setRandSeed } from "../random";

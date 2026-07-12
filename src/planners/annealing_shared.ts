@@ -113,6 +113,32 @@ export function refreshAllRatings(state: AnnealingState) {
   }
 }
 
+export function bootstrapEmptyRoutes(state: AnnealingState, maxLoss = 240) {
+  for (let tran = 0; tran < state.NTRANS; tran++) {
+    if (state.scheduleSizes[tran] !== 0) continue;
+
+    let bestReq = -1;
+    let bestScore = -INF;
+
+    for (let req = 0; req < state.NREQS; req++) {
+      if (!state.unassigned[req]) continue;
+      insertStops(state, tran, 0, 0, 0, req);
+      const score = scoreRoute(state, tran);
+      removeStops(state, tran, 0, 1);
+      if (score > bestScore) {
+        bestScore = score;
+        bestReq = req;
+      }
+    }
+
+    if (bestReq === -1 || bestScore < -maxLoss) continue;
+
+    insertStops(state, tran, 0, 0, 0, bestReq);
+    state.scheduleRatings[tran] = bestScore;
+    state.unassigned[bestReq] = 0;
+  }
+}
+
 export function insertStops(state: AnnealingState, tran: number, start: number, end: number, deck: 0 | 1, req: number) {
   const offset = routeOffset(state, tran);
   const size = state.scheduleSizes[tran]!;

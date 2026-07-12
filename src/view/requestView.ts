@@ -1,5 +1,5 @@
 import { Request, UUID, type Schedule } from "../types";
-import type { RoadMap } from "../randomMap";
+import type { RoadMap } from "../roadmap";
 import type { Infer } from "../schema";
 import { border, color, div, h3, html, padding, span, style, table, td, tr, type HTMLGenerator } from "./html";
 

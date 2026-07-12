@@ -1,7 +1,7 @@
 
 import type { Module, UUID } from "../types";
 // import { findPath } from "../planner";
-import {  type RoadMap } from "../randomMap";
+import {  type RoadMap } from "../roadmap";
 import { div, p, style } from "./html";
 import { hightLights } from "./main";
 
