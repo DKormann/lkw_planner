@@ -25,7 +25,7 @@ export function plannerView(mod: Module): HTMLElement {
 
   if (annealingSession == null) {
     annealingSession = createImprovedAnnealingSession(mod, 1_900_000);
-    annealer = annealingSession.iterateForMs(500);
+    annealer = annealingSession.iterateForMs(10);
   } else if (annealer == null) {
     annealer = annealingSession.getResult();
   }

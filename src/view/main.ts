@@ -7,6 +7,7 @@ import { mkStored, mkWritable, type Writable } from "../writeable";
 import { randChoice, random, setRandSeed } from "../random";
 import { number } from "../schema";
 import { plannerView } from "../planners/annealing";
+import { setUpWasm, wasmView } from "./wasmview";
 
 
 export let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
@@ -61,35 +62,14 @@ function setter (store: Writable<number> ){
 }
 
 
+await setUpWasm(module)
+
 function mkWindow (tab: number = 0 ) {
 
   let tabFields = [
     ['map', mapView(module)],
-    // ['requests', requestView(module.requests)],
-    // ['schedule', scheduleView() ],
     ['planner', plannerView(module)],
-    // ['settings', div(
-    //   style({
-    //     padding: "1em",
-    //   }),
-    //   h2("settings"),
-
-
-    //   table(
-    //     tr(
-    //       td("LKW count"),
-    //       td(setter(LKW_COUNT))
-    //     ),
-    //     tr(
-    //       td("Request count"),
-    //       td(setter(REQUEST_COUNT))
-    //     ),
-    //     tr(button("generate", ()=>{
-    //       window.location.reload()
-    //     }))
-    //   )
-
-    // )]
+    ['wasm', wasmView(module)]
   ] as const
 
   const el = div(style({
@@ -138,10 +118,9 @@ function mkWindow (tab: number = 0 ) {
     )
   }
 
-
   openTab(tabFields[tab]![0])
 
   return el
 }
 
-contentSpace.replaceChildren(mkWindow(1 ), mkWindow())
+contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
