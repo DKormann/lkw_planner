@@ -57,16 +57,17 @@ async function mkWasm(planner: Module){
   })
 
   let requests = array(REQ, planner.NREQS)
-  let unassigned = array("u8", planner.NREQS)
+  let assigned = array("u8", planner.NREQS)
 
   let schedule = array(STOP, planner.NTRANS * TSIZE)
   let sched_size = array("i16", planner.NTRANS)
   let tran_positions = array("i16", planner.NTRANS)
 
 
-  const tryAssign = func(["i32"], "void", (reqid)=>{
+  const tryAssign = func([], "void", ()=>{
 
     let tran = local("i32")
+    let req_id = local("i32")
     let A = local("i32")
     let B = local("i32")
     let tmp = local("i32")
@@ -85,6 +86,12 @@ async function mkWasm(planner: Module){
     return [
 
       tran.set(randint.call(0, planner.NTRANS)),
+      req_id.set(randint.call(0, planner.NREQS)),
+      ifElse(
+        assigned.at(req_id).eq(1),
+        ret(),
+        assigned.at(req_id).set(1)
+      ),
       toffset.set(tran.mul(TSIZE)),
 
       tsize.set(sched_size.at(tran)),
@@ -102,8 +109,8 @@ async function mkWasm(planner: Module){
 
       tmp.set(randint.call(0, 2)),
 
-      sched_view.at(A).set({ req_id: reqid, is_load: 1, deck: tmp }),
-      sched_view.at(B.add(1)).set({ req_id: reqid, is_load: 0, deck: tmp }),
+      sched_view.at(A).set({ req_id, is_load: 1, deck: tmp }),
+      sched_view.at(B.add(1)).set({ req_id, is_load: 0, deck: tmp }),
       
       sched_size.at(tran).set(tsize.add(2)),
     ]
@@ -115,6 +122,10 @@ async function mkWasm(planner: Module){
       requests.at(reqn).set({start, end, value, deadline})
   )
 
+  const search = func([], "void", ()=>{
+    return tryAssign.call()
+  })
+
   let mod = await compile({
     addRequest,
     dists,
@@ -122,7 +133,7 @@ async function mkWasm(planner: Module){
     requests,
     schedule,
     sched_size,
-    unassigned,
+    unassigned: assigned,
     tran_positions,
   }, { runtimeBoundsChecks: true })
 

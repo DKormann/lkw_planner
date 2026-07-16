@@ -54,6 +54,7 @@ const walkStmt = (s: Stmt, fns: Visitors) => {
     case "loop": walkExpr(s.cond, fns); s.body.forEach(x => walkStmt(x, fns)); return
     case "break":
     case "continue":
+      return
     case "trap": fns.trap?.(s.message); return
     case "return": if (s.value) walkExpr(s.value, fns); return
     case "call.void": fns.func?.(s.target); s.args.forEach(arg => walkExpr(arg, fns)); return
