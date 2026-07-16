@@ -1,5 +1,5 @@
 import type { Module } from "../types";
-import { array, breakTo, compile, func, i32, i64, ifElse, local, loop, ret, shl, shr, struct, umod, xor, type Expr, type LocalVar, type NumType, type StmtBody } from "../wasm";
+import { array, breakTo, compile, func, i32, i64, ifElse, local, loop, ret, shl, shr, struct, trap, umod, xor, type Expr, type LocalVar, type NumType, type StmtBody } from "../wasm";
 import { div, h2, p, style } from "./html";
 
 
@@ -44,7 +44,7 @@ async function mkWasm(planner: Module){
 
 
   const STOP = struct({
-    req_id: ["i16", 10],
+    req_id: ["u16", 10],
     is_load: ["u8", 1],
     deck: ["u8", 1],
   })
@@ -61,8 +61,8 @@ async function mkWasm(planner: Module){
 
   let schedule = array(STOP, planner.NTRANS * TSIZE)
   let sched_size = array("i16", planner.NTRANS)
+  let tran_positions = array("i16", planner.NTRANS)
 
-  let tran_positions = array("i16", NWORKERS)
 
   const tryAssign = func(["i32"], "void", (reqid)=>{
 
@@ -88,6 +88,7 @@ async function mkWasm(planner: Module){
       toffset.set(tran.mul(TSIZE)),
 
       tsize.set(sched_size.at(tran)),
+      ifElse(tsize.gt(TSIZE - 2), trap("schedule capacity exceeded")),
       A.set(randint.call(0, tsize.add(1))),
       B.set(randint.call(0, tsize.add(1))),
       ifElse(A.gt(B), [

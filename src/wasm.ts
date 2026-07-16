@@ -26,7 +26,8 @@ export const compile = async <T extends ModuleDef>(
     shared: true,
   })
   const compiled = await WebAssembly.compile(emitModule(analysis, options).buffer)
-  const instance = await WebAssembly.instantiate(compiled, { env: { memory } })
+  const trap = (id: number): never => { throw new Error(analysis.trapMessages[id] ?? `Unknown WASM trap ${id}`) }
+  const instance = await WebAssembly.instantiate(compiled, { env: { memory, trap } })
   const jsFuncs = Object.fromEntries(
     Object.keys(analysis.funcs).map(name => [name, instance.exports[name]]),
   )
@@ -42,5 +43,6 @@ export const compile = async <T extends ModuleDef>(
     ...jsArrays,
     ["mod", compiled],
     ["memory", memory],
+    ["trapMessages", analysis.trapMessages],
   ]) as CompileResult<T>
 }

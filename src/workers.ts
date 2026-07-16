@@ -4,6 +4,7 @@ type WorkerRequestPayload = {
   tag: "module"
   mod: WebAssembly.Module
   memory: WebAssembly.Memory
+  trapMessages: string[]
 } | {
   tag: "call"
   func: string
@@ -29,7 +30,8 @@ const workerBundleMain = () => {
     const msg = event.data as WorkerRequest
     try {
       if (msg.tag === "module") {
-        const instance = await WebAssembly.instantiate(msg.mod, { env: { memory: msg.memory } })
+        const trap = (id: number): never => { throw new Error(msg.trapMessages[id] ?? `Unknown WASM trap ${id}`) }
+        const instance = await WebAssembly.instantiate(msg.mod, { env: { memory: msg.memory, trap } })
         funcs = Object.fromEntries(
           Object.entries(instance.exports).filter((entry): entry is [string, (...args: any[]) => any] => typeof entry[1] === "function"),
         )
@@ -101,7 +103,7 @@ export async function mkWorker<T extends ModuleDef>(mod: CompileResult<T>): Prom
   }
 
   try {
-    await request<void>({ tag: "module", mod: mod.mod, memory: mod.memory })
+    await request<void>({ tag: "module", mod: mod.mod, memory: mod.memory, trapMessages: mod.trapMessages })
   } catch (error) {
     terminated = true
     worker.terminate()

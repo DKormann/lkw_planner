@@ -1,4 +1,4 @@
-import { array, compile, func, i32, ifElse, local, ret, struct } from "../src/wasm"
+import { array, compile, func, i32, ifElse, local, ret, struct, trap } from "../src/wasm"
 import { assert, runTests } from "./tests"
 
 await runTests(
@@ -18,6 +18,14 @@ await runTests(
 
     assert(mod.run(42) === undefined, "void WASM export should return undefined")
     assert(mod.read() === 42, "void helper call should execute its statements")
+  },
+
+  async function explicitTrap() {
+    const fail = func([], "void", () => trap("deliberate test trap"))
+    const { fail: run } = await compile({ fail })
+    let error: unknown
+    try { run() } catch (caught) { error = caught }
+    assert(error instanceof Error && error.message === "deliberate test trap", "trap should report its message")
   },
 
   async function conditionalExpressionsAndStatements() {

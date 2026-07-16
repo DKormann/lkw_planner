@@ -62,6 +62,7 @@ export type Stmt =
   | { kind: "continue", target: number | null }
   | { kind: "return", value?: Expr<NumType> }
   | { kind: "call.void", target: AnyFunc, args: Expr<NumType>[] }
+  | { kind: "trap", message: string }
   | { kind: "expr", expr: Expr<NumType> }
 
 export type BlockHandle = { kind: "block", id: number }
@@ -160,6 +161,7 @@ export type CompileResult<T extends ModuleDef> = {
 } & {
   mod: WebAssembly.Module
   memory: WebAssembly.Memory
+  trapMessages: string[]
 }
 
 
@@ -193,6 +195,7 @@ const isStmt = (x: unknown): x is Stmt =>
     (x as Stmt).kind === "continue" ||
     (x as Stmt).kind === "return" ||
     (x as Stmt).kind === "call.void" ||
+    (x as Stmt).kind === "trap" ||
     (x as Stmt).kind === "expr" ||
     ((x as Stmt).kind === "if" && Array.isArray((x as { then?: unknown }).then))
   )
@@ -421,6 +424,7 @@ export function ret<T extends NumType>(value: ExprLike<T>): Stmt
 export function ret<T extends NumType>(value?: ExprLike<T>): Stmt {
   return { kind: "return", ...(value === undefined ? {} : { value: lit(inferType(value), value) as Expr<NumType> }) }
 }
+export const trap = (message: string): Stmt => ({ kind: "trap", message })
 export const block = (body: ControlBody<BlockHandle>): Stmt => {
   const self: BlockHandle = { kind: "block", id: nextControlId++ }
   return { kind: "block", control: self.id, body: controlBody(self, body) }

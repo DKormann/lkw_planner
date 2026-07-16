@@ -153,7 +153,7 @@ const compileExpr = (e: AnyExpr, fix: Map<AnyFunc, number>, lix: Record<number, 
     case "cmp":
       return [...compileExpr(e.left, fix, lix, arrays, options), ...compileExpr(e.right, fix, lix, arrays, options), codes.cmp[e.op as CmpOp][e.inputType as NumType]]
     case "call":
-      return [...flatMap(e.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(e.target)!)]
+      return [...flatMap(e.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(e.target)! + 1)]
     case "cast": {
       const from = e.inputType as NumType
       const to = e.type as NumType
@@ -195,6 +195,7 @@ const compileStmt = (
   lix: Record<number, number>,
   arrays: Map<AnyArray, ArrayLayout>,
   options: CompileOptions,
+  traps: Map<string, number>,
   stack: LabelFrame[] = [],
 ): number[] => {
   switch (s.kind) {
@@ -219,11 +220,11 @@ const compileStmt = (
       ]
     }
     case "if":
-      return [...compileExpr(s.cond, fix, lix, arrays, options), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, fix, lix, arrays, options, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, fix, lix, arrays, options, [{}, ...stack]))] : []), 0x0b]
+      return [...compileExpr(s.cond, fix, lix, arrays, options), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, fix, lix, arrays, options, traps, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, fix, lix, arrays, options, traps, [{}, ...stack]))] : []), 0x0b]
     case "block":
-      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
+      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
     case "loop":
-      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, fix, lix, arrays, options), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
+      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, fix, lix, arrays, options), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
     case "break":
       if (s.target == null) throw new Error("breakTo() used outside a block or loop")
       return [0x0c, ...u32(depth(stack, s.target, "break"))]
@@ -232,8 +233,10 @@ const compileStmt = (
       return [0x0c, ...u32(depth(stack, s.target, "continue"))]
     case "return":
       return [...(s.value ? compileExpr(s.value, fix, lix, arrays, options) : []), 0x0f]
+    case "trap":
+      return [0x41, ...sN(traps.get(s.message)!, 32), 0x10, 0x00]
     case "call.void":
-      return [...flatMap(s.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(s.target)!)]
+      return [...flatMap(s.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(s.target)! + 1)]
     case "expr":
       return [...compileExpr(s.expr, fix, lix, arrays, options), 0x1a]
     default:
@@ -242,14 +245,19 @@ const compileStmt = (
 }
 
 
-export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, pages }: ModuleAnalysis<T>, options: CompileOptions = {}) => {
-  const functionSection = builtFuncs.flatMap((_, i) => u32(i))
-  const exportSection = fEntries.flatMap(([name, func]) => [...str(name), 0x00, ...u32(fix.get(func)!)])
+export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, pages }: ModuleAnalysis<T>, options: CompileOptions = {}) => {
+  const traps = new Map(trapMessages.map((message, id) => [message, id]))
+  const functionSection = builtFuncs.flatMap((_, i) => u32(i + 1))
+  const exportSection = fEntries.flatMap(([name, func]) => [...str(name), 0x00, ...u32(fix.get(func)! + 1)])
   return new Uint8Array([
     ...magic,
-    ...section(0x01, [...u32(builtFuncs.length), ...flatMap(builtFuncs, ({ func }) => [0x60, ...u32(func.params.length), ...func.params.map(t => codes.type[t]), ...(func.result === "void" ? [0x00] : [0x01, codes.type[func.result]])])]),
+    ...section(0x01, [...u32(builtFuncs.length + 1), 0x60, 0x01, codes.type.i32, 0x00, ...flatMap(builtFuncs, ({ func }) => [0x60, ...u32(func.params.length), ...func.params.map(t => codes.type[t]), ...(func.result === "void" ? [0x00] : [0x01, codes.type[func.result]])])]),
     ...section(0x02, [
-      0x01,
+      0x02,
+      ...str("env"),
+      ...str("trap"),
+      0x00,
+      0x00,
       ...str("env"),
       ...str("memory"),
       0x02,
@@ -265,7 +273,7 @@ export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, lay
         const stmts = asStmts(built)
         const decls = [...u32(locals.length), ...flatMap(locals, ([, type]) => [...u32(1), codes.type[type]])]
         const code = stmts
-          ? [...flatMap(stmts, s => compileStmt(s, fix, localIndexes, layouts, options)), ...(func.result === "void" ? [] : codes.zero[func.result])]
+          ? [...flatMap(stmts, s => compileStmt(s, fix, localIndexes, layouts, options, traps)), ...(func.result === "void" ? [] : codes.zero[func.result])]
           : compileExpr(built as AnyExpr, fix, localIndexes, layouts, options)
         const body = [...decls, ...code, 0x0b]
         return [...u32(body.length), ...body]
