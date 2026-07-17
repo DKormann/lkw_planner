@@ -1,44 +1,27 @@
 import {
-  type AnyArray, type AnyExpr, type AnyFunc, type ArithmeticOp, type BitOp, type CmpOp, type Expr, type IntType,
+  type AnyArray, type AnyExpr, type AnyFunc, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
   type ModuleDef, type NumType, type RemainderOp, type Stmt, type StorageType, asStmts,
 } from "./wasm_ast"
 import { type ArrayLayout, type ModuleAnalysis } from "./wasm_analyze"
 
 const magic = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
-const cmpOps: CmpOp[] = ["eq", "lt", "gt"]
-export type CompileOptions = { runtimeBoundsChecks?: boolean }
 const resultType = (result: AnyFunc["result"]) =>
   typeof result === "object" ? result.storage === "i64" ? "i64" : "i32" : result
 
-const offsetCodes = <O extends string, T extends string>(offsets: Record<O, number>, bases: Record<T, number>) =>
-  Object.fromEntries((Object.entries(offsets) as [O, number][]).map(([op, offset]) => [op,
-    Object.fromEntries((Object.entries(bases) as [T, number][]).map(([type, base]) => [type, base + offset])),
-  ])) as Record<O, Record<T, number>>
-
-const arithmeticCodes = offsetCodes<ArithmeticOp, NumType>(
-  { add: 0, sub: 1, mul: 2, div: 3 },
-  { i32: 0x6a, i64: 0x7c, f32: 0x92, f64: 0xa0 },
-)
-const bitCodes = offsetCodes<BitOp, IntType>(
-  { and: 7, or: 8, xor: 9, shl: 10, shr: 12 },
-  { i32: 0x6a, i64: 0x7c },
-)
-const remainderCodes = offsetCodes<RemainderOp, IntType>(
-  { mod: 5, umod: 6 },
-  { i32: 0x6a, i64: 0x7c },
-)
-const signedCmpCodes = offsetCodes<CmpOp, IntType>({ eq: 0, lt: 2, gt: 4 }, { i32: 0x46, i64: 0x51 })
-const floatCmpCodes = offsetCodes<CmpOp, "f32" | "f64">({ eq: 0, lt: 2, gt: 3 }, { f32: 0x5b, f64: 0x61 })
-const compareCodes = Object.fromEntries(cmpOps.map(op => [op, { ...signedCmpCodes[op], ...floatCmpCodes[op] }])) as Record<CmpOp, Record<NumType, number>>
+const numberBase = { i32: 0x6a, i64: 0x7c, f32: 0x92, f64: 0xa0 } as Record<NumType, number>
+const opcode = (op: ArithmeticOp | BitOp | RemainderOp | CmpOp, type: NumType) => {
+  const arithmetic = ["add", "sub", "mul", "div"].indexOf(op)
+  if (arithmetic >= 0) return numberBase[type] + arithmetic
+  const integer = ["mod", "umod", "and", "or", "xor", "shl", "", "shr"].indexOf(op)
+  if (integer >= 0) return numberBase[type] + 5 + integer
+  return ({ i32: 0x46, i64: 0x51, f32: 0x5b, f64: 0x61 } as Record<NumType, number>)[type]
+    + (op === "eq" ? 0 : op === "lt" ? 2 : type[0] === "i" ? 4 : 3)
+}
 
 const codes = {
   type: { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c } as Record<NumType, number>,
-  bin: arithmeticCodes,
-  cmp: compareCodes,
   load: { i32: 0x28, i64: 0x29, f32: 0x2a, f64: 0x2b, i8: 0x2c, u8: 0x2d, i16: 0x2e, u16: 0x2f } as Record<StorageType, number>,
   store: { i32: 0x36, i64: 0x37, f32: 0x38, f64: 0x39, i8: 0x3a, u8: 0x3a, i16: 0x3b, u16: 0x3b } as Record<StorageType, number>,
-  bit: bitCodes,
-  remainder: remainderCodes,
   align: { i8: 0, u8: 0, i16: 1, u16: 1, i32: 2, f32: 2, i64: 3, f64: 3 } as Record<StorageType, number>,
   zero: { i32: [0x41, 0], i64: [0x42, 0], f32: [0x43, 0, 0, 0, 0], f64: [0x44, 0, 0, 0, 0, 0, 0, 0, 0] } as Record<NumType, number[]>,
 }
@@ -102,39 +85,11 @@ const checkMoveBounds = (layout: ArrayLayout, target: Expr<"i32">, source: Expr<
     throw new Error(`Array move (${to}, ${from}, ${size}) out of bounds for length ${layout.length}`)
 }
 
-const runtimeBoundsGuard = (
-  index: Expr<"i32">,
-  length: number,
-  fix: Map<AnyFunc, number>,
-  lix: Record<number, number>,
-  arrays: Map<AnyArray, ArrayLayout>,
-  options: CompileOptions,
-) => options.runtimeBoundsChecks ? [
-  ...compileExpr(index, fix, lix, arrays, options), 0x41, 0x00, 0x48,
-  ...compileExpr(index, fix, lix, arrays, options), 0x41, ...sN(length, 32), 0x4f,
-  0x72, 0x04, 0x40, 0x00, 0x0b,
-] : []
-
-const runtimeMoveBoundsGuard = (
-  layout: ArrayLayout,
-  target: Expr<"i32">,
-  source: Expr<"i32">,
-  count: Expr<"i32">,
-  fix: Map<AnyFunc, number>,
-  lix: Record<number, number>,
-  arrays: Map<AnyArray, ArrayLayout>,
-  options: CompileOptions,
+const makeCompiler = (
+  fix: Map<AnyFunc, number>, lix: Record<number, number>, arrays: Map<AnyArray, ArrayLayout>,
+  traps: Map<string, number>, logs: Map<string, number>,
 ) => {
-  if (!options.runtimeBoundsChecks) return []
-  const code = (value: Expr<"i32">) => compileExpr(value, fix, lix, arrays, options)
-  const trapIf = (condition: number[]) => [...condition, 0x04, 0x40, 0x00, 0x0b]
-  const negative = (value: Expr<"i32">) => trapIf([...code(value), 0x41, 0x00, 0x48])
-  const countPastEnd = trapIf([...code(count), 0x41, ...sN(layout.length, 32), 0x4b])
-  const pastEnd = (start: Expr<"i32">) => trapIf([...code(start), 0x41, ...sN(layout.length, 32), ...code(count), 0x6b, 0x4b])
-  return [...negative(target), ...negative(source), ...negative(count), ...countPastEnd, ...pastEnd(target), ...pastEnd(source)]
-}
-
-const compileExpr = (e: AnyExpr, fix: Map<AnyFunc, number>, lix: Record<number, number>, arrays: Map<AnyArray, ArrayLayout>, options: CompileOptions): number[] => {
+const compileExpr = (e: AnyExpr): number[] => {
   switch (e.kind) {
     case "const":
       if (e.type === "i32") return [0x41, ...sN(e.value as number, 32)]
@@ -145,17 +100,12 @@ const compileExpr = (e: AnyExpr, fix: Map<AnyFunc, number>, lix: Record<number, 
     case "local.get":
       return [0x20, ...u32(lix[e.local]!)]
     case "bin": {
-      const opcode = e.op in codes.bit
-        ? codes.bit[e.op as BitOp][e.type as IntType]
-        : e.op in codes.remainder
-        ? codes.remainder[e.op as RemainderOp][e.type as IntType]
-        : codes.bin[e.op as ArithmeticOp][e.type as NumType]
-      return [...compileExpr(e.left, fix, lix, arrays, options), ...compileExpr(e.right, fix, lix, arrays, options), opcode]
+      return [...compileExpr(e.left), ...compileExpr(e.right), opcode(e.op, e.type)]
     }
     case "cmp":
-      return [...compileExpr(e.left, fix, lix, arrays, options), ...compileExpr(e.right, fix, lix, arrays, options), codes.cmp[e.op as CmpOp][e.inputType as NumType]]
+      return [...compileExpr(e.left), ...compileExpr(e.right), opcode(e.op, e.inputType)]
     case "call":
-      return [...flatMap(e.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(e.target)! + 2)]
+      return [...flatMap(e.args, compileExpr), 0x10, ...u32(fix.get(e.target)! + 2)]
     case "cast": {
       const from = e.inputType as NumType
       const to = e.type as NumType
@@ -169,15 +119,15 @@ const compileExpr = (e: AnyExpr, fix: Map<AnyFunc, number>, lix: Record<number, 
       if (to === "f64" && from === "i64") opcode = 0xb9
       if (to === "f64" && from === "f32") opcode = 0xbb
       if (opcode == null) throw new Error(`Unsupported cast ${from} -> ${to}`)
-      return [...compileExpr(e.value, fix, lix, arrays, options), opcode]
+      return [...compileExpr(e.value), opcode]
     }
     case "if":
-      return [...compileExpr(e.cond, fix, lix, arrays, options), 0x04, codes.type[e.type as NumType], ...compileExpr(e.then, fix, lix, arrays, options), 0x05, ...compileExpr(e.else, fix, lix, arrays, options), 0x0b]
+      return [...compileExpr(e.cond), 0x04, codes.type[e.type as NumType], ...compileExpr(e.then), 0x05, ...compileExpr(e.else), 0x0b]
     case "load": {
       const layout = arrays.get(e.array)
       if (!layout) throw new Error(`Unknown array ${e.array}`)
       checkArrayBounds(layout, e.index)
-      return [...runtimeBoundsGuard(e.index, layout.length, fix, lix, arrays, options), ...compileExpr(addr(layout, e.index, e.stride, e.offset), fix, lix, arrays, options), codes.load[e.storage as StorageType], ...memarg(e.storage as StorageType)]
+      return [...compileExpr(addr(layout, e.index, e.stride, e.offset)), codes.load[e.storage as StorageType], ...memarg(e.storage as StorageType)]
     }
     default:
       return die(e)
@@ -191,43 +141,33 @@ const depth = (stack: LabelFrame[], control: number, kind: NonNullable<LabelFram
   return i
 }
 
-const compileStmt = (
-  s: Stmt,
-  fix: Map<AnyFunc, number>,
-  lix: Record<number, number>,
-  arrays: Map<AnyArray, ArrayLayout>,
-  options: CompileOptions,
-  traps: Map<string, number>,
-  logs: Map<string, number>,
-  stack: LabelFrame[] = [],
-): number[] => {
+const compileStmt = (s: Stmt, stack: LabelFrame[] = []): number[] => {
   switch (s.kind) {
     case "local.set":
-      return [...compileExpr(s.value, fix, lix, arrays, options), 0x21, ...u32(lix[s.local]!)]
+      return [...compileExpr(s.value), 0x21, ...u32(lix[s.local]!)]
     case "array.store": {
       const layout = arrays.get(s.array)
       if (!layout) throw new Error(`Unknown array ${s.array}`)
       checkArrayBounds(layout, s.index)
-      return [...runtimeBoundsGuard(s.index, layout.length, fix, lix, arrays, options), ...compileExpr(addr(layout, s.index, s.stride, s.offset), fix, lix, arrays, options), ...compileExpr(s.value, fix, lix, arrays, options), codes.store[s.type], ...memarg(s.type)]
+      return [...compileExpr(addr(layout, s.index, s.stride, s.offset)), ...compileExpr(s.value), codes.store[s.type], ...memarg(s.type)]
     }
     case "array.move": {
       const layout = arrays.get(s.array)
       if (!layout) throw new Error(`Unknown array ${s.array}`)
       checkMoveBounds(layout, s.target, s.source, s.count)
       return [
-        ...runtimeMoveBoundsGuard(layout, s.target, s.source, s.count, fix, lix, arrays, options),
-        ...compileExpr(addr(layout, s.target), fix, lix, arrays, options),
-        ...compileExpr(addr(layout, s.source), fix, lix, arrays, options),
-        ...compileExpr(s.count.mul(layout.elementSize), fix, lix, arrays, options),
+        ...compileExpr(addr(layout, s.target)),
+        ...compileExpr(addr(layout, s.source)),
+        ...compileExpr(s.count.mul(layout.elementSize)),
         0xfc, 0x0a, 0x00, 0x00,
       ]
     }
     case "if":
-      return [...compileExpr(s.cond, fix, lix, arrays, options), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{}, ...stack]))] : []), 0x0b]
+      return [...compileExpr(s.cond), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, [{}, ...stack]))] : []), 0x0b]
     case "block":
-      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
+      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
     case "loop":
-      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, fix, lix, arrays, options), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
+      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
     case "break":
       if (s.target == null) throw new Error("breakTo() used outside a block or loop")
       return [0x0c, ...u32(depth(stack, s.target, "break"))]
@@ -235,22 +175,24 @@ const compileStmt = (
       if (s.target == null) throw new Error("continueTo() used outside a loop")
       return [0x0c, ...u32(depth(stack, s.target, "continue"))]
     case "return":
-      return [...(s.value ? compileExpr(s.value, fix, lix, arrays, options) : []), 0x0f]
+      return [...(s.value ? compileExpr(s.value) : []), 0x0f]
     case "trap":
       return [0x41, ...sN(traps.get(s.message)!, 32), 0x10, 0x00]
     case "log":
-      return [0x41, ...sN(logs.get(s.message)!, 32), ...compileExpr(s.value, fix, lix, arrays, options), 0x10, 0x01]
+      return [0x41, ...sN(logs.get(s.message)!, 32), ...compileExpr(s.value), 0x10, 0x01]
     case "call.void":
-      return [...flatMap(s.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(s.target)! + 2)]
+      return [...flatMap(s.args, compileExpr), 0x10, ...u32(fix.get(s.target)! + 2)]
     case "expr":
-      return [...compileExpr(s.expr, fix, lix, arrays, options), 0x1a]
+      return [...compileExpr(s.expr), 0x1a]
     default:
       return die(s)
   }
 }
+return { expr: compileExpr, stmt: compileStmt }
+}
 
 
-export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages }: ModuleAnalysis<T>, options: CompileOptions = {}) => {
+export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages }: ModuleAnalysis<T>) => {
   const traps = new Map(trapMessages.map((message, id) => [message, id]))
   const logs = new Map(logMessages.map((message, id) => [message, id]))
   const functionSection = builtFuncs.flatMap((_, i) => u32(i + 2))
@@ -286,12 +228,13 @@ export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, lay
     ...section(0x0a, [
       ...u32(builtFuncs.length),
       ...flatMap(builtFuncs, ({ func, built, locals, localIndexes }) => {
+        const compiler = makeCompiler(fix, localIndexes, layouts, traps, logs)
         const stmts = asStmts(built)
         const decls = [...u32(locals.length), ...flatMap(locals, ([, type]) => [...u32(1), codes.type[type]])]
         const result = resultType(func.result)
         const code = stmts
-          ? [...flatMap(stmts, s => compileStmt(s, fix, localIndexes, layouts, options, traps, logs)), ...(result === "void" ? [] : codes.zero[result])]
-          : compileExpr(built as AnyExpr, fix, localIndexes, layouts, options)
+          ? [...flatMap(stmts, s => compiler.stmt(s)), ...(result === "void" ? [] : codes.zero[result])]
+          : compiler.expr(built as AnyExpr)
         const body = [...decls, ...code, 0x0b]
         return [...u32(body.length), ...body]
       }),

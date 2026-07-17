@@ -1,4 +1,4 @@
-import { array, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
+import { array, boundsCheck, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
 import { assert, runTests } from "./tests"
 
 await runTests(
@@ -146,8 +146,8 @@ await runTests(
   async function runtimeStructBoundsCheck() {
     const Item = struct({ value: "i32" })
     const items = array(Item, 2)
-    const read = func(["i32"], "i32", i => items.at(i).value)
-    const { read: run } = await compile({ read }, { runtimeBoundsChecks: true })
+    const read = func(["i32"], "i32", i => [boundsCheck(items, i), ret(items.at(i).value)])
+    const { read: run } = await compile({ read })
     let trapped = false
     try { run(2) } catch { trapped = true }
     assert(trapped, "dynamic out-of-bounds struct access should trap")

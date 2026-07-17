@@ -1,5 +1,5 @@
 import { analyzeModule, type BuiltFunc } from "./wasm_analyze"
-import type { AnyArray, AnyExpr, AnyFunc, ModuleDef, Stmt } from "./wasm_ast"
+import { asStmts, type AnyArray, type AnyExpr, type AnyFunc, type ModuleDef, type Stmt } from "./wasm_ast"
 
 const binary: Record<string, string> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%", umod: "%u",
@@ -81,21 +81,11 @@ const formatFunction = (
   const result = typeof func.result === "object" ? `struct${func.result.size * 8}` : func.result
   const signature = `${result} ${functions.get(func)}(${func.params.map((type, i) => `${type} p${i}`).join(", ")})`
   const declarations = built.locals.map(([, type], i) => `  ${type} v${i};`)
-  const statements = Array.isArray(built.built) || isStmt(built.built)
-    ? lines(flatten(built.built as Stmt | Stmt[]))
-    : [`  return ${expr(built.built)};`]
+  const body = asStmts(built.built)
+  const statements = body ? lines(body) : [`  return ${expr(built.built)};`]
   return [signature + " {", ...declarations, ...statements, "}"].join("\n")
 }
 
 const address = (value: { index: AnyExpr, stride: number, offset: number }, expr: (value: AnyExpr) => string) =>
   value.offset ? `(${expr(value.index)} * ${value.stride} + ${value.offset})` :
   value.stride === 1 ? expr(value.index) : `(${expr(value.index)} * ${value.stride})`
-
-const isStmt = (value: unknown): value is Stmt =>
-  !!value && typeof value === "object" && "kind" in value &&
-  ((value as Stmt).kind !== "if"
-    ? ["local.set", "array.store", "array.move", "block", "loop", "break", "continue", "return", "call.void", "trap", "log", "expr"].includes((value as Stmt).kind)
-    : Array.isArray((value as { then?: unknown }).then))
-
-const flatten = (body: Stmt | Stmt[]): Stmt[] =>
-  Array.isArray(body) ? body.flatMap(flatten) : [body]

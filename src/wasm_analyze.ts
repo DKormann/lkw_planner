@@ -1,8 +1,7 @@
 import {
   allocateLocal, asStmts,
-  type AnyArray, type AnyExpr, type AnyFunc, type ArrayDefs, type Expr,
-  type FuncBody, type FuncDefs, type ModuleDef, type NumType, type ResultType, type Stmt,
-  type StorageType,
+  type AnyArray, type AnyFunc, type ArrayDefs, type Expr,
+  type FuncBody, type FuncDefs, type ModuleDef, type NumType, type ResultType,
 } from "./wasm_ast"
 
 const die = (x: unknown): never => { throw new Error(`Unexpected value: ${String(x)}`) }
@@ -26,48 +25,28 @@ type Visitors = {
   trap?: (message: string) => void
   log?: (message: string) => void
 }
-const walkExpr = (e: AnyExpr, fns: Visitors) => {
-  switch (e.kind) {
-    case "const": return
-    case "local.get": fns.local?.(e.local, e.type); return
-    case "bin":
-    case "cmp":
-      walkExpr(e.left, fns); walkExpr(e.right, fns); return
-    case "call":
-      fns.func?.(e.target)
-      e.args.forEach((arg: AnyExpr) => walkExpr(arg, fns)); return
-    case "cast":
-      walkExpr(e.value, fns); return
-    case "if":
-      walkExpr(e.cond, fns); walkExpr(e.then, fns); walkExpr(e.else, fns); return
-    case "load":
-      fns.array?.(e.array); walkExpr(e.index, fns); return
-    default: die(e)
+const walk = (node: any, fns: Visitors): void => {
+  if (node == null) return
+  if (Array.isArray(node)) return node.forEach(x => walk(x, fns))
+  const children = (...values: any[]) => values.forEach(x => walk(x, fns))
+  switch (node.kind) {
+    case "const": case "break": case "continue": return
+    case "local.get": fns.local?.(node.local, node.type); return
+    case "local.set": fns.local?.(node.local, node.type); return walk(node.value, fns)
+    case "bin": case "cmp": return children(node.left, node.right)
+    case "call": case "call.void": fns.func?.(node.target); return walk(node.args, fns)
+    case "cast": case "return": return walk(node.value, fns)
+    case "if": return children(node.cond, node.then, node.else)
+    case "load": fns.array?.(node.array); return walk(node.index, fns)
+    case "array.store": fns.array?.(node.array); return children(node.index, node.value)
+    case "array.move": fns.array?.(node.array); return children(node.target, node.source, node.count)
+    case "block": return walk(node.body, fns)
+    case "loop": return children(node.cond, node.body)
+    case "trap": fns.trap?.(node.message); return
+    case "log": fns.log?.(node.message); return walk(node.value, fns)
+    case "expr": return walk(node.expr, fns)
+    default: die(node)
   }
-}
-
-const walkStmt = (s: Stmt, fns: Visitors) => {
-  switch (s.kind) {
-    case "local.set": fns.local?.(s.local, s.type); walkExpr(s.value, fns); return
-    case "array.store": fns.array?.(s.array); walkExpr(s.index, fns); walkExpr(s.value, fns); return
-    case "array.move": fns.array?.(s.array); walkExpr(s.target, fns); walkExpr(s.source, fns); walkExpr(s.count, fns); return
-    case "if": walkExpr(s.cond, fns); s.then.forEach(x => walkStmt(x, fns)); s.else.forEach(x => walkStmt(x, fns)); return
-    case "block": s.body.forEach(x => walkStmt(x, fns)); return
-    case "loop": walkExpr(s.cond, fns); s.body.forEach(x => walkStmt(x, fns)); return
-    case "break":
-    case "continue":
-      return
-    case "trap": fns.trap?.(s.message); return
-    case "log": fns.log?.(s.message); walkExpr(s.value, fns); return
-    case "return": if (s.value) walkExpr(s.value, fns); return
-    case "call.void": fns.func?.(s.target); s.args.forEach(arg => walkExpr(arg, fns)); return
-    case "expr": walkExpr(s.expr, fns); return
-    default: die(s)
-  }
-}
-const walkBody = (body: FuncBody<ResultType>, visitors: Visitors) => {
-  const stmts = asStmts(body)
-  stmts ? stmts.forEach(s => walkStmt(s, visitors)) : walkExpr(body, visitors)
 }
 
 
@@ -82,12 +61,6 @@ const arrayLayouts = (arrays: AnyArray[]) => {
   }
   return { layouts, bytes: offset }
 }
-
-const moduleFuncs = <T extends ModuleDef>(mod: T) =>
-  Object.fromEntries(Object.entries(mod).filter(([, v]) => v.kind === "func")) as FuncDefs<T>
-
-const moduleArrays = <T extends ModuleDef>(mod: T) =>
-  Object.fromEntries(Object.entries(mod).filter(([, v]) => v.kind === "array")) as ArrayDefs<T>
 
 export type BuiltFunc = {
   func: AnyFunc
@@ -107,7 +80,7 @@ const buildFunc = (func: AnyFunc): BuiltFunc => {
   const built = typeof func.result === "object" && !asStmts(result) ? result.packed : result
   const found = new Map<number, NumType>()
   const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), traps = new Set<string>(), logs = new Set<string>()
-  walkBody(built, {
+  walk(built, {
     local: (id, type) => found.set(id, type), func: f => functions.add(f), array: a => arrays.add(a),
     trap: message => traps.add(message), log: message => logs.add(message),
   })
@@ -133,8 +106,9 @@ const buildReferencedFunctions = (roots: AnyFunc[]) => {
 }
 
 export const analyzeModule = <T extends ModuleDef>(mod: T) => {
-  const funcs = moduleFuncs(mod)
-  const arrays = moduleArrays(mod)
+  const entries = Object.entries(mod)
+  const funcs = Object.fromEntries(entries.filter(([, v]) => v.kind === "func")) as FuncDefs<T>
+  const arrays = Object.fromEntries(entries.filter(([, v]) => v.kind === "array")) as ArrayDefs<T>
   const fEntries = Object.entries(funcs) as [keyof FuncDefs<T> & string, FuncDefs<T>[keyof FuncDefs<T>]][]
   const builtFuncs = buildReferencedFunctions(fEntries.map(([, func]) => func))
   const fix = new Map(builtFuncs.map(({ func }, i) => [func, i]))

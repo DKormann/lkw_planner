@@ -2,19 +2,16 @@ export * from "./wasm_ast"
 export { formatModule } from "./wasm_format"
 
 import { analyzeModule } from "./wasm_analyze"
-import { emitModule, type CompileOptions } from "./wasm_codegen"
+import { emitModule } from "./wasm_codegen"
 import type {
-  AnyArray, AnyFunc, CompileResult, JSStruct, ModuleDef, StorageType, StructFields, StructType, TypedArrayFor,
+  AnyArray, AnyFunc, CompileResult, JSStruct, ModuleDef, StructFields, StructType,
 } from "./wasm_ast"
 
-export type { CompileOptions } from "./wasm_codegen"
-
-const typedArrayCtor = <T extends StorageType>(type: T): {
-  new(buffer: ArrayBufferLike, byteOffset: number, length: number): TypedArrayFor<T>
-} => ({
+const arrayCtors = {
   i8: Int8Array, u8: Uint8Array, i16: Int16Array, u16: Uint16Array,
   i32: Int32Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array,
-} as any)[type]
+  su8: Uint8Array, su16: Uint16Array, si32: Uint32Array, si64: BigUint64Array,
+}
 
 export const decodeStruct = <F extends StructFields>(type: StructType<F>, raw: number | bigint): JSStruct<F> => {
   const packed = BigInt.asUintN(type.size * 8, BigInt(raw))
@@ -29,7 +26,6 @@ export const decodeStruct = <F extends StructFields>(type: StructType<F>, raw: n
 
 export const compile = async <T extends ModuleDef>(
   mod: T,
-  options: CompileOptions = {},
 ): Promise<CompileResult<T>> => {
   const analysis = analyzeModule(mod)
   const memory = new WebAssembly.Memory({
@@ -37,39 +33,28 @@ export const compile = async <T extends ModuleDef>(
     maximum: analysis.pages,
     shared: true,
   })
-  const compiled = await WebAssembly.compile(emitModule(analysis, options).buffer)
+  const compiled = await WebAssembly.compile(emitModule(analysis).buffer)
   const trap = (id: number): never => { throw new Error(analysis.trapMessages[id] ?? `Unknown WASM trap ${id}`) }
   const log = (id: number, value: number) => console.log(analysis.logMessages[id] ?? `WASM log ${id}`, value)
   const instance = await WebAssembly.instantiate(compiled, { env: { memory, trap, log } })
   const funcEntries = Object.entries(analysis.funcs) as [string, AnyFunc][]
-  const resultStructs = Object.fromEntries(
-    funcEntries.flatMap(([name, func]) =>
-      typeof func.result === "object" ? [[name, func.result]] : []),
-  )
-  const jsFuncs = Object.fromEntries(funcEntries.map(([name, func]) => {
+  const jsFuncs: Record<string, unknown> = {}, resultStructs: Record<string, StructType<any>> = {}
+  for (const [name, func] of funcEntries) {
     const wasmFunc = instance.exports[name] as (...args: unknown[]) => number | bigint
-    if (typeof func.result !== "object") return [name, wasmFunc]
-    const result = func.result
-    return [name, (...args: unknown[]) => decodeStruct(result, wasmFunc(...args))]
-  }))
+    jsFuncs[name] = wasmFunc
+    if (typeof func.result === "object") {
+      resultStructs[name] = func.result
+      jsFuncs[name] = (...args: unknown[]) => decodeStruct(func.result as StructType<any>, wasmFunc(...args))
+    }
+  }
   const jsArrays = (Object.entries(analysis.arrays) as [string, AnyArray][]).map(([name, arr]) => {
     const layout = analysis.layouts.get(arr)!
-    if (typeof arr.type !== "string") {
-      const Ctor = {
-        u8: Uint8Array, u16: Uint16Array, i32: Uint32Array, i64: BigUint64Array,
-      }[arr.type.storage]
-      return [name, new Ctor(memory.buffer, layout.offset, arr.length)] as const
-    }
-    const Ctor = typedArrayCtor(arr.type)
+    const key = typeof arr.type === "string" ? arr.type : `s${arr.type.storage}`
+    const Ctor = arrayCtors[key as keyof typeof arrayCtors]
     return [name, new Ctor(memory.buffer, layout.offset, arr.length)] as const
   })
-  return Object.fromEntries([
-    ...Object.entries(jsFuncs),
-    ...jsArrays,
-    ["mod", compiled],
-    ["memory", memory],
-    ["trapMessages", analysis.trapMessages],
-    ["logMessages", analysis.logMessages],
-    ["resultStructs", resultStructs],
-  ]) as CompileResult<T>
+  return Object.assign(jsFuncs, Object.fromEntries(jsArrays), {
+    mod: compiled, memory, resultStructs,
+    trapMessages: analysis.trapMessages, logMessages: analysis.logMessages,
+  }) as CompileResult<T>
 }

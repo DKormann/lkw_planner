@@ -1,5 +1,5 @@
 import type { Module } from "../types"
-import { array, compile, func, ifElse, local, ret, struct, trap, umod, type Expr, type StmtBody } from "../wasm"
+import { array, compile, func, i32, ifElse, lit, local, log, ret, struct, trap, umod, type AnyArray, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
 import type { AnnealingResult } from "./annealing_baseline"
 
 const NWORKERS = 4
@@ -40,6 +40,22 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   })
   const randint = func(["i32", "i32"], "i32", (gid, max) => umod(randNext.call(gid), max))
 
+  let DEBUG = true
+
+  function debug (tag: string, value: ExprLike<"i32">){
+    if (!DEBUG) return []
+    return [
+      log(tag, value)
+    ]
+  }
+
+
+  const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
+    const i = lit("i32", index), n = lit("i32", count)
+    return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
+  }
+
+
   const tryAssign = func([], "void", () => {
     const tran = local("i32")
     const req_id = local("i32")
@@ -48,6 +64,8 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     const tmp = local("i32")
     const tsize = local("i32")
     const toffset = local("i32")
+
+
     const schedView = {
       move: (target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32">): StmtBody =>
         schedule.move(toffset.add(target), toffset.add(source), count),
@@ -55,6 +73,8 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     }
 
     return [
+
+
       tran.set(randint.call(0, planner.NTRANS)),
       req_id.set(randint.call(0, planner.NREQS)),
       ifElse(assigned.at(req_id).eq(1), ret(), assigned.at(req_id).set(1)),
@@ -78,6 +98,9 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
       requests.at(reqn).set({ start, end, value, deadline }),
   )
   const search = func([], "void", () => [
+
+    debug("debugger on.", 0),
+
     tryAssign.call(),
     tryAssign.call(),
     tryAssign.call(),
@@ -96,7 +119,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     search,
     sched_size,
     tran_positions,
-  }, { runtimeBoundsChecks: true })
+  })
 
   wasm.dists.set(planner.roadmap.CostMatrix)
   wasm.randState.set(Array.from({ length: NWORKERS * 2 }, (_, i) => i + 1))

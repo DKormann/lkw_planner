@@ -1,8 +1,5 @@
 
-const numTypes = ["i32", "i64", "f32", "f64"] as const
-
-
-export type NumType = typeof numTypes[number]
+export type NumType = "i32" | "i64" | "f32" | "f64"
 export type ResultType = NumType | "void" | StructType<any>
 export type IntType = "i32" | "i64"
 export type PackedType = "i8" | "u8" | "i16" | "u16"
@@ -202,19 +199,8 @@ const mutable = <T extends NumType>(node: CoreExpr<T>, write: (value: Expr<T>) =
 
 const isStmt = (x: unknown): x is Stmt =>
   !!x && typeof x === "object" && "kind" in x && (
-    (x as Stmt).kind === "local.set" ||
-    (x as Stmt).kind === "array.store" ||
-    (x as Stmt).kind === "array.move" ||
-    (x as Stmt).kind === "block" ||
-    (x as Stmt).kind === "loop" ||
-    (x as Stmt).kind === "break" ||
-    (x as Stmt).kind === "continue" ||
-    (x as Stmt).kind === "return" ||
-    (x as Stmt).kind === "call.void" ||
-    (x as Stmt).kind === "trap" ||
-    (x as Stmt).kind === "log" ||
-    (x as Stmt).kind === "expr" ||
-    ((x as Stmt).kind === "if" && Array.isArray((x as { then?: unknown }).then))
+    (x as Stmt).kind === "if" ? Array.isArray((x as { then?: unknown }).then) :
+    !["const", "local.get", "bin", "call", "cast", "load", "cmp"].includes((x as { kind: string }).kind)
   )
 
 const stmtList = (body: StmtBody): Stmt[] => Array.isArray(body) ? body.flatMap(stmtList) : [body]
@@ -249,8 +235,7 @@ const remainder = <T extends IntType>(op: RemainderOp, left: Expr<T>, right: Exp
 const cmp = <T extends NumType>(op: CmpOp, left: Expr<T>, right: ExprLike<T>): Expr<"i32"> =>
   expr<"i32">({ kind: "cmp", type: "i32", inputType: left.type, op, left: left as unknown as Expr<NumType>, right: lit<T>(left.type as T, right) as unknown as Expr<NumType> } as CoreExpr<"i32">)
 
-export const localExpr = <T extends NumType>(type: T, local: number) => expr({ kind: "local.get", type, local })
-export const allocateLocal = <T extends NumType>(type: T) => localExpr(type, nextLocalId++)
+export const allocateLocal = <T extends NumType>(type: T) => expr({ kind: "local.get", type, local: nextLocalId++ })
 
 const mkLocal = <T extends NumType>(type: T): LocalVar<T> => {
   const local = nextLocalId++
@@ -361,49 +346,30 @@ export const struct = <const F extends StructFields>(fields: F): StructType<F> =
   return { kind: "struct", fields, layout: layout as { [K in keyof F]: FieldLayout }, storage, size: storageSize[storage] }
 }
 
-const mkArray = <T extends StorageType>(type: T, length: number): ArrayHandle<T> => {
-  if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
-  let handle!: ArrayHandle<T>
-  handle = {
-    kind: "array",
-    type, length, elementSize: storageSize[type],
-    at: index => memoryValue(handle, index, type, storageSize[type]),
-    move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
-  }
-  return handle
-}
-
-const mkStructArray = <F extends StructFields>(type: StructType<F>, length: number): StructArrayHandle<F> => {
-  if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
-  let handle!: StructArrayHandle<F>
-  handle = {
-    kind: "array", type, length, elementSize: type.size,
-    at: index => structValue(type, memoryValue(handle, index, type.storage, type.size) as StructBacking),
-    move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
-  }
-  return handle
-}
-
 const cast = <T extends NumType>(type: T, value: Expr<NumType>, unsigned = false): Expr<T> =>
   value.type === type ? value as unknown as Expr<T> : expr<T>({ kind: "cast", type, inputType: value.type, unsigned, value } as CoreExpr<T>)
+const number = <T extends NumType>(type: T, value: unknown): Expr<T> =>
+  typeof value === (type === "i64" ? "bigint" : "number")
+    ? expr({ kind: "const", type, value } as CoreExpr<T>)
+    : cast(type, value as Expr<NumType>)
 
 export function i32(value: number): Expr<"i32">
 export function i32<T extends IntType>(value: Expr<T>): Expr<"i32">
-export function i32(value: unknown) { return typeof value === "number" ? expr({ kind: "const", type: "i32", value }) : cast("i32", value as Expr<NumType>) }
+export function i32(value: unknown) { return number("i32", value) }
 
 export function i64(value: bigint): Expr<"i64">
 export function i64<T extends IntType>(value: Expr<T>): Expr<"i64">
-export function i64(value: unknown) { return typeof value === "bigint" ? expr({ kind: "const", type: "i64", value }) : cast("i64", value as Expr<NumType>) }
+export function i64(value: unknown) { return number("i64", value) }
 export const i64u = (value: Expr<"i32">) => cast("i64", value as unknown as Expr<NumType>, true)
 
 type F32Input = number | Expr<"i32" | "i64" | "f32" | "f64">
 export function f32(value: number): Expr<"f32">
 export function f32<T extends NumType>(value: Expr<T>): Expr<"f32">
-export function f32(value: F32Input) { return typeof value === "number" ? expr({ kind: "const", type: "f32", value }) : cast("f32", value as unknown as Expr<NumType>) }
+export function f32(value: F32Input) { return number("f32", value) }
 
 export function f64(value: number): Expr<"f64">
 export function f64<T extends NumType>(value: Expr<T>): Expr<"f64">
-export function f64(value: F32Input) { return typeof value === "number" ? expr({ kind: "const", type: "f64", value }) : cast("f64", value as unknown as Expr<NumType>) }
+export function f64(value: F32Input) { return number("f64", value) }
 
 export function ifElse<T extends NumType>(cond: Expr<"i32">, then: Expr<T>, else_: Expr<T>): Expr<T>
 export function ifElse(cond: Expr<"i32">, then: StmtBody, else_?: StmtBody): Stmt
@@ -452,7 +418,19 @@ export const func = <const A extends readonly NumType[], R extends ResultType>(p
 export function array<T extends StorageType>(type: T, length: number): ArrayHandle<T>
 export function array<F extends StructFields>(type: StructType<F>, length: number): StructArrayHandle<F>
 export function array(type: StorageType | StructType<any>, length: number) {
-  return typeof type === "string" ? mkArray(type, length) : mkStructArray(type, length)
+  if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
+  const storage = typeof type === "string" ? type : type.storage
+  const elementSize = typeof type === "string" ? storageSize[type] : type.size
+  let handle: AnyArray
+  handle = {
+    kind: "array", type, length, elementSize,
+    at: index => {
+      const value = memoryValue(handle, index, storage, elementSize)
+      return typeof type === "string" ? value : structValue(type, value)
+    },
+    move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
+  }
+  return handle
 }
 
 const mkStructLocal = <F extends StructFields>(type: StructType<F>) =>
@@ -475,6 +453,10 @@ export function ret<T extends NumType>(value?: ExprLike<T> | { packed: AnyExpr }
   return { kind: "return", value: lit(inferType(value), value) as Expr<NumType> }
 }
 export const trap = (message: string): Stmt => ({ kind: "trap", message })
+export const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
+  const i = lit("i32", index), n = lit("i32", count)
+  return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
+}
 export const log = (message: string, value: ExprLike<"i32">): Stmt => ({ kind: "log", message, value: lit("i32", value) })
 export const block = (body: ControlBody<BlockHandle>): Stmt => {
   const self: BlockHandle = { kind: "block", id: nextControlId++ }
