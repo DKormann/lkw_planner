@@ -7,6 +7,8 @@ import { type ArrayLayout, type ModuleAnalysis } from "./wasm_analyze"
 const magic = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
 const cmpOps: CmpOp[] = ["eq", "lt", "gt"]
 export type CompileOptions = { runtimeBoundsChecks?: boolean }
+const resultType = (result: AnyFunc["result"]) =>
+  typeof result === "object" ? result.storage === "i64" ? "i64" : "i32" : result
 
 const offsetCodes = <O extends string, T extends string>(offsets: Record<O, number>, bases: Record<T, number>) =>
   Object.fromEntries((Object.entries(offsets) as [O, number][]).map(([op, offset]) => [op,
@@ -153,7 +155,7 @@ const compileExpr = (e: AnyExpr, fix: Map<AnyFunc, number>, lix: Record<number, 
     case "cmp":
       return [...compileExpr(e.left, fix, lix, arrays, options), ...compileExpr(e.right, fix, lix, arrays, options), codes.cmp[e.op as CmpOp][e.inputType as NumType]]
     case "call":
-      return [...flatMap(e.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(e.target)! + 1)]
+      return [...flatMap(e.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(e.target)! + 2)]
     case "cast": {
       const from = e.inputType as NumType
       const to = e.type as NumType
@@ -196,6 +198,7 @@ const compileStmt = (
   arrays: Map<AnyArray, ArrayLayout>,
   options: CompileOptions,
   traps: Map<string, number>,
+  logs: Map<string, number>,
   stack: LabelFrame[] = [],
 ): number[] => {
   switch (s.kind) {
@@ -220,11 +223,11 @@ const compileStmt = (
       ]
     }
     case "if":
-      return [...compileExpr(s.cond, fix, lix, arrays, options), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, fix, lix, arrays, options, traps, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, fix, lix, arrays, options, traps, [{}, ...stack]))] : []), 0x0b]
+      return [...compileExpr(s.cond, fix, lix, arrays, options), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{}, ...stack]))] : []), 0x0b]
     case "block":
-      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
+      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
     case "loop":
-      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, fix, lix, arrays, options), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
+      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond, fix, lix, arrays, options), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, fix, lix, arrays, options, traps, logs, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
     case "break":
       if (s.target == null) throw new Error("breakTo() used outside a block or loop")
       return [0x0c, ...u32(depth(stack, s.target, "break"))]
@@ -235,8 +238,10 @@ const compileStmt = (
       return [...(s.value ? compileExpr(s.value, fix, lix, arrays, options) : []), 0x0f]
     case "trap":
       return [0x41, ...sN(traps.get(s.message)!, 32), 0x10, 0x00]
+    case "log":
+      return [0x41, ...sN(logs.get(s.message)!, 32), ...compileExpr(s.value, fix, lix, arrays, options), 0x10, 0x01]
     case "call.void":
-      return [...flatMap(s.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(s.target)! + 1)]
+      return [...flatMap(s.args, arg => compileExpr(arg, fix, lix, arrays, options)), 0x10, ...u32(fix.get(s.target)! + 2)]
     case "expr":
       return [...compileExpr(s.expr, fix, lix, arrays, options), 0x1a]
     default:
@@ -245,19 +250,30 @@ const compileStmt = (
 }
 
 
-export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, pages }: ModuleAnalysis<T>, options: CompileOptions = {}) => {
+export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages }: ModuleAnalysis<T>, options: CompileOptions = {}) => {
   const traps = new Map(trapMessages.map((message, id) => [message, id]))
-  const functionSection = builtFuncs.flatMap((_, i) => u32(i + 1))
-  const exportSection = fEntries.flatMap(([name, func]) => [...str(name), 0x00, ...u32(fix.get(func)! + 1)])
+  const logs = new Map(logMessages.map((message, id) => [message, id]))
+  const functionSection = builtFuncs.flatMap((_, i) => u32(i + 2))
+  const exportSection = fEntries.flatMap(([name, func]) => [...str(name), 0x00, ...u32(fix.get(func)! + 2)])
   return new Uint8Array([
     ...magic,
-    ...section(0x01, [...u32(builtFuncs.length + 1), 0x60, 0x01, codes.type.i32, 0x00, ...flatMap(builtFuncs, ({ func }) => [0x60, ...u32(func.params.length), ...func.params.map(t => codes.type[t]), ...(func.result === "void" ? [0x00] : [0x01, codes.type[func.result]])])]),
+    ...section(0x01, [...u32(builtFuncs.length + 2),
+      0x60, 0x01, codes.type.i32, 0x00,
+      0x60, 0x02, codes.type.i32, codes.type.i32, 0x00,
+      ...flatMap(builtFuncs, ({ func }) => {
+        const result = resultType(func.result)
+        return [0x60, ...u32(func.params.length), ...func.params.map(t => codes.type[t]), ...(result === "void" ? [0x00] : [0x01, codes.type[result]])]
+      })]),
     ...section(0x02, [
-      0x02,
+      0x03,
       ...str("env"),
       ...str("trap"),
       0x00,
       0x00,
+      ...str("env"),
+      ...str("log"),
+      0x00,
+      0x01,
       ...str("env"),
       ...str("memory"),
       0x02,
@@ -272,8 +288,9 @@ export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, lay
       ...flatMap(builtFuncs, ({ func, built, locals, localIndexes }) => {
         const stmts = asStmts(built)
         const decls = [...u32(locals.length), ...flatMap(locals, ([, type]) => [...u32(1), codes.type[type]])]
+        const result = resultType(func.result)
         const code = stmts
-          ? [...flatMap(stmts, s => compileStmt(s, fix, localIndexes, layouts, options, traps)), ...(func.result === "void" ? [] : codes.zero[func.result])]
+          ? [...flatMap(stmts, s => compileStmt(s, fix, localIndexes, layouts, options, traps, logs)), ...(result === "void" ? [] : codes.zero[result])]
           : compileExpr(built as AnyExpr, fix, localIndexes, layouts, options)
         const body = [...decls, ...code, 0x0b]
         return [...u32(body.length), ...body]

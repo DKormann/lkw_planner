@@ -1,4 +1,4 @@
-import { array, compile, func, i32, ifElse, local, ret, struct, trap } from "../src/wasm"
+import { array, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
 import { assert, runTests } from "./tests"
 
 await runTests(
@@ -26,6 +26,29 @@ await runTests(
     let error: unknown
     try { run() } catch (caught) { error = caught }
     assert(error instanceof Error && error.message === "deliberate test trap", "trap should report its message")
+  },
+
+  async function javascriptLogger() {
+    const write = func(["i32"], "void", value => log("logged value", value))
+    const { write: run } = await compile({ write })
+    const original = console.log
+    let received: unknown[] = []
+    console.log = (...values) => { received = values }
+    try { run(42) } finally { console.log = original }
+    assert(received[0] === "logged value" && received[1] === 42, "logger should pass its string and value to JavaScript")
+  },
+
+  function formatsExpandedAst() {
+    const values = array("i32", 2)
+    const helper = func(["i32"], "void", value => values.at(0).set(value))
+    const run = func(["i32"], "void", value => [
+      helper.call(value),
+      ifElse(value.lt(0), trap("negative value")),
+    ])
+    const text = formatModule({ run, values })
+    assert(text.includes("void run(i32 p0)"), "formatter should print exported signatures")
+    assert(text.includes("store_i32(values"), "formatter should print helper memory stores")
+    assert(text.includes('trap(\"negative value\")'), "formatter should print trap messages")
   },
 
   async function conditionalExpressionsAndStatements() {
@@ -71,6 +94,27 @@ await runTests(
     assert(run(20, 22) === 42, "whole-struct set should snapshot one i64 into the local")
   },
 
+  async function structFunctionResults() {
+    const Pair = struct({ left: "u16", right: ["i16", 10] })
+    const pairs = array(Pair, 1)
+    const write = func([], "void", () => pairs.at(0).set({ left: 40, right: -3 }))
+    const get = func([], Pair, () => pairs.at(0))
+    const make = func([], Pair, () => {
+      const pair = local(Pair)
+      return [pair.set({ left: 9, right: -2 }), ret(pair)]
+    })
+    const sum = func([], "i32", () => {
+      const pair = get.call()
+      return pair.left.add(pair.right)
+    })
+    const mod = await compile({ write, get, make, sum, pairs })
+    mod.write()
+    assert(mod.sum() === 37, "struct-returning WASM calls should expose typed fields internally")
+    const pair = mod.get()
+    assert(pair.left === 40 && pair.right === -3, "exported struct results should decode to JavaScript objects")
+    assert(mod.make().left === 9 && mod.make().right === -2, "ret should accept struct values")
+  },
+
   async function packedBitFields() {
     const Bits = struct({ low: ["i16", 6], high: ["i16", 10] })
     const values = array(Bits, 1)
@@ -80,10 +124,10 @@ await runTests(
     })
     const mod = await compile({ values, write })
 
-    assert(Bits.size === 8, "packed struct should still use one canonical i64")
+    assert(Bits.size === 2, "16 bits should use u16 storage")
     assert(Bits.layout.high.bitOffset === 6, "bitfields should be packed consecutively")
     assert(mod.write() === 12, "signed bitfield should be sign-extended on read")
-    assert(mod.values[0] === 0xd1 && mod.values[1] === 0xfe, "writing one bitfield should preserve its neighbor")
+    assert(mod.values[0] === 0xfed1, "writing one bitfield should preserve its neighbor")
   },
 
   async function structArrayMove() {

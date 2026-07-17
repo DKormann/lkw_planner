@@ -3,7 +3,7 @@ const numTypes = ["i32", "i64", "f32", "f64"] as const
 
 
 export type NumType = typeof numTypes[number]
-export type ResultType = NumType | "void"
+export type ResultType = NumType | "void" | StructType<any>
 export type IntType = "i32" | "i64"
 export type PackedType = "i8" | "u8" | "i16" | "u16"
 export type StorageType = NumType | PackedType
@@ -63,6 +63,7 @@ export type Stmt =
   | { kind: "return", value?: Expr<NumType> }
   | { kind: "call.void", target: AnyFunc, args: Expr<NumType>[] }
   | { kind: "trap", message: string }
+  | { kind: "log", message: string, value: Expr<"i32"> }
   | { kind: "expr", expr: Expr<NumType> }
 
 export type BlockHandle = { kind: "block", id: number }
@@ -101,15 +102,19 @@ export type StructType<F extends StructFields> = {
   fields: F
   layout: { [K in keyof F]: FieldLayout }
   size: number
+  storage: "u8" | "u16" | IntType
 }
 type StructMembers<F extends StructFields> = {
+  [K in keyof F]: Expr<FieldValue<F[K]>>
+}
+type MutableStructMembers<F extends StructFields> = {
   [K in keyof F]: MutableValue<FieldValue<F[K]>>
 }
 export type StructInit<F extends StructFields> = { [K in keyof F]: ExprLike<FieldValue<F[K]>> }
-export type StructValue<F extends StructFields> = StructMembers<F> & { packed: Expr<"i64"> }
-export type MutableStruct<F extends StructFields> = StructMembers<F> & {
-  packed: MutableValue<"i64">
-  set(value: StructValue<F> | StructInit<F>): Stmt
+export type JSStruct<F extends StructFields> = { [K in keyof F]: Value<FieldValue<F[K]>> }
+export type StructValue<F extends StructFields> = StructMembers<F> & { packed: AnyExpr }
+export type MutableStruct<F extends StructFields> = StructValue<F> & MutableStructMembers<F> & {
+  set(value: MutableStruct<F> | StructInit<F>): Stmt
 }
 export type StructArrayHandle<F extends StructFields> = {
   kind: "array"
@@ -123,13 +128,19 @@ export type StructArrayHandle<F extends StructFields> = {
 export type ExprLike<T extends NumType> = Expr<T> | Value<T>
 export type StmtBody = Stmt | StmtBody[]
 type ControlBody<H extends ControlHandle> = StmtBody | ((self: H) => StmtBody)
-export type FuncBody<R extends ResultType> = R extends NumType ? Expr<R> | StmtBody : StmtBody
+export type FuncBody<R extends ResultType> =
+  R extends NumType ? Expr<R> | StmtBody :
+  R extends StructType<infer F> ? StructValue<F> | StmtBody :
+  StmtBody
 export type FuncHandle<A extends readonly NumType[], R extends ResultType> = {
   kind: "func"
   params: A
   result: R
   build: (...args: readonly Expr<NumType>[]) => FuncBody<R>
-  call: (...args: ArgsLike<A>) => R extends NumType ? Expr<R> : Stmt
+  call: (...args: ArgsLike<A>) =>
+    R extends NumType ? Expr<R> :
+    R extends StructType<infer F> ? StructValue<F> :
+    Stmt
 }
 
 export type AnyFunc = {
@@ -154,14 +165,19 @@ export type FuncDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyF
 export type ArrayDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyArray ? K : never]: Extract<T[K], AnyArray> }
 export type CompileResult<T extends ModuleDef> = {
   [K in keyof T]:
-    T[K] extends AnyFunc ? (...args: ArgsVal<T[K]["params"]>) => T[K]["result"] extends NumType ? Value<T[K]["result"]> : void
+    T[K] extends AnyFunc ? (...args: ArgsVal<T[K]["params"]>) =>
+      T[K]["result"] extends NumType ? Value<T[K]["result"]> :
+      T[K]["result"] extends StructType<infer F> ? JSStruct<F> :
+      void
     : T[K] extends ArrayHandle<infer S> ? TypedArrayFor<S>
-    : T[K] extends StructArrayHandle<any> ? Uint8Array
+    : T[K] extends StructArrayHandle<any> ? Uint8Array | Uint16Array | Uint32Array | BigUint64Array
     : never
 } & {
   mod: WebAssembly.Module
   memory: WebAssembly.Memory
   trapMessages: string[]
+  logMessages: string[]
+  resultStructs: Record<string, StructType<any>>
 }
 
 
@@ -196,6 +212,7 @@ const isStmt = (x: unknown): x is Stmt =>
     (x as Stmt).kind === "return" ||
     (x as Stmt).kind === "call.void" ||
     (x as Stmt).kind === "trap" ||
+    (x as Stmt).kind === "log" ||
     (x as Stmt).kind === "expr" ||
     ((x as Stmt).kind === "if" && Array.isArray((x as { then?: unknown }).then))
   )
@@ -251,9 +268,10 @@ const mkHandle = <A extends readonly NumType[], R extends ResultType>(
     params, result, build,
     call: (...args: ArgsLike<A>) => {
       const callArgs = params.map((type, i) => lit(type, args[i] as ExprLike<typeof type>)) as Expr<NumType>[]
-      return result === "void"
-        ? { kind: "call.void", target: handle, args: callArgs }
-        : expr({ kind: "call", type: result, target: handle, args: callArgs })
+      if (result === "void") return { kind: "call.void", target: handle, args: callArgs }
+      const type = (typeof result === "string" ? result : result.storage === "i64" ? "i64" : "i32") as NumType
+      const call = expr({ kind: "call", type, target: handle, args: callArgs })
+      return typeof result === "string" ? call : readStruct(result, call)
     },
   } as FuncHandle<A, R>
   return handle
@@ -269,34 +287,62 @@ const memoryValue = <T extends StorageType>(array: AnyArray, index: ExprLike<"i3
     ({ kind: "array.store", array, type: storage, index: at, stride, offset, value: value as Expr<NumType> }))
 }
 
-const packedFieldValue = (backing: MutableValue<"i64">, field: FieldLayout) => {
+type StructBacking = any
+type InternalStruct<F extends StructFields> = MutableStruct<F> & { packed: StructBacking }
+
+const readField = (backing: AnyExpr, field: FieldLayout) => {
   const { bits } = field
-  const bitOffset = BigInt(field.bitOffset)
-  if (field.storage === "i64") {
-    if (bitOffset !== 0n) throw new Error("i64 struct field must start at byte zero")
-    return backing
+  if (field.storage === "i64") return backing
+  if (backing.type === "i64") {
+    const bitOffset = BigInt(field.bitOffset), mask = (1n << BigInt(bits)) - 1n
+    const raw = i32(backing.shr(bitOffset).and(mask))
+    return field.storage.startsWith("i") && bits < 32
+      ? ifElse(raw.and(2 ** (bits - 1)), raw.sub(2 ** bits), raw)
+      : raw
   }
-  const mask = (1n << BigInt(bits)) - 1n
-  const raw = i32(backing.shr(bitOffset).and(mask))
-  const value = field.storage.startsWith("i") && bits < 32
+  if (field.storage === "i32" && field.bitOffset === 0) return backing
+  const mask = 2 ** bits - 1
+  const raw = backing.shr(field.bitOffset).and(mask)
+  return field.storage.startsWith("i") && bits < 32
     ? ifElse(raw.and(2 ** (bits - 1)), raw.sub(2 ** bits), raw)
     : raw
-  const fieldMask = mask << bitOffset
-  return mutable(value, input => backing.set(backing.and(~fieldMask).or(i64u(input).and(mask).shl(bitOffset))))
 }
 
-const structValue = <F extends StructFields>(type: StructType<F>, packed: MutableValue<"i64">): MutableStruct<F> => {
+const packedFieldValue = (backing: StructBacking, field: FieldLayout) => {
+  const value = readField(backing, field)
+  if (field.storage === "i64") return backing
+  if (backing.type === "i64") {
+    const bitOffset = BigInt(field.bitOffset), mask = (1n << BigInt(field.bits)) - 1n
+    const fieldMask = mask << bitOffset
+    return mutable<"i32">(value as Expr<"i32">, input => backing.set(backing.and(~fieldMask).or(i64u(input).and(mask).shl(bitOffset))))
+  }
+  if (field.storage === "i32" && field.bitOffset === 0) return backing
+  const mask = 2 ** field.bits - 1, fieldMask = mask << field.bitOffset
+  return mutable<"i32">(value, input => backing.set(backing.and(~fieldMask).or(input.and(mask).shl(field.bitOffset))))
+}
+
+const readStruct = <F extends StructFields>(type: StructType<F>, packed: AnyExpr): StructValue<F> =>
+  Object.assign(Object.fromEntries(Object.keys(type.fields).map(name => [name, readField(packed, type.layout[name]!)])), { packed }) as StructValue<F>
+
+const structValue = <F extends StructFields>(type: StructType<F>, packed: StructBacking): MutableStruct<F> => {
   const fields = Object.fromEntries(Object.keys(type.fields).map(name => [name, packedFieldValue(packed, type.layout[name]!)]))
-  return Object.assign(fields, { packed, set: (value: StructValue<F> | StructInit<F>) => packed.set("packed" in value ? value.packed as Expr<"i64"> : packStruct(type, value)) }) as MutableStruct<F>
+  return Object.assign(fields, { packed, set: (value: MutableStruct<F> | StructInit<F>) =>
+    packed.set("packed" in value ? (value as InternalStruct<F>).packed : packStruct(type, value)) }) as InternalStruct<F>
 }
 
-const packStruct = <F extends StructFields>(type: StructType<F>, values: StructInit<F>) =>
-  Object.keys(type.fields).reduce((packed, name) => {
+const packStruct = <F extends StructFields>(type: StructType<F>, values: StructInit<F>): AnyExpr => {
+  if (type.storage !== "i64") return Object.keys(type.fields).reduce((packed, name) => {
+    const field = type.layout[name]!, value = values[name]!
+    const mask = 2 ** field.bits - 1
+    return packed.or(lit("i32", value as ExprLike<"i32">).and(mask).shl(field.bitOffset))
+  }, i32(0))
+  return Object.keys(type.fields).reduce((packed, name) => {
     const field = type.layout[name]!, value = values[name]!
     if (field.storage === "i64") return lit("i64", value as ExprLike<"i64">)
     const mask = (1n << BigInt(field.bits)) - 1n
     return packed.or(i64u(lit("i32", value as ExprLike<"i32">)).and(mask).shl(BigInt(field.bitOffset)))
   }, i64(0n))
+}
 
 export const struct = <const F extends StructFields>(fields: F): StructType<F> => {
   if ("set" in fields || "packed" in fields) throw new Error("Struct fields cannot be named set or packed")
@@ -311,7 +357,8 @@ export const struct = <const F extends StructFields>(fields: F): StructType<F> =
     layout[name] = { storage, bitOffset: used, bits }
     used += bits
   }
-  return { kind: "struct", fields, layout: layout as { [K in keyof F]: FieldLayout }, size: 8 }
+  const storage = used <= 8 ? "u8" : used <= 16 ? "u16" : used <= 32 ? "i32" : "i64"
+  return { kind: "struct", fields, layout: layout as { [K in keyof F]: FieldLayout }, storage, size: storageSize[storage] }
 }
 
 const mkArray = <T extends StorageType>(type: T, length: number): ArrayHandle<T> => {
@@ -330,8 +377,8 @@ const mkStructArray = <F extends StructFields>(type: StructType<F>, length: numb
   if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
   let handle!: StructArrayHandle<F>
   handle = {
-    kind: "array", type, length, elementSize: 8,
-    at: index => structValue(type, memoryValue(handle, index, "i64", 8)),
+    kind: "array", type, length, elementSize: type.size,
+    at: index => structValue(type, memoryValue(handle, index, type.storage, type.size) as StructBacking),
     move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
   }
   return handle
@@ -409,7 +456,7 @@ export function array(type: StorageType | StructType<any>, length: number) {
 }
 
 const mkStructLocal = <F extends StructFields>(type: StructType<F>) =>
-  structValue(type, mkLocal("i64"))
+  structValue(type, mkLocal(type.storage === "i64" ? "i64" : "i32"))
 
 type LocalFactory = {
   <T extends NumType>(type: T): LocalVar<T>
@@ -421,10 +468,14 @@ export const local = (<T extends NumType, F extends StructFields>(type: T | Stru
 
 export function ret(): Stmt
 export function ret<T extends NumType>(value: ExprLike<T>): Stmt
-export function ret<T extends NumType>(value?: ExprLike<T>): Stmt {
-  return { kind: "return", ...(value === undefined ? {} : { value: lit(inferType(value), value) as Expr<NumType> }) }
+export function ret(value: { packed: AnyExpr }): Stmt
+export function ret<T extends NumType>(value?: ExprLike<T> | { packed: AnyExpr }): Stmt {
+  if (value === undefined) return { kind: "return" }
+  if (typeof value === "object" && "packed" in value) return { kind: "return", value: value.packed }
+  return { kind: "return", value: lit(inferType(value), value) as Expr<NumType> }
 }
 export const trap = (message: string): Stmt => ({ kind: "trap", message })
+export const log = (message: string, value: ExprLike<"i32">): Stmt => ({ kind: "log", message, value: lit("i32", value) })
 export const block = (body: ControlBody<BlockHandle>): Stmt => {
   const self: BlockHandle = { kind: "block", id: nextControlId++ }
   return { kind: "block", control: self.id, body: controlBody(self, body) }

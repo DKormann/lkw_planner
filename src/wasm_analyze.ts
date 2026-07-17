@@ -15,6 +15,7 @@ export type ModuleAnalysis<T extends ModuleDef> = {
   fix: Map<AnyFunc, number>
   layouts: Map<AnyArray, ArrayLayout>
   trapMessages: string[]
+  logMessages: string[]
   pages: number
 }
 
@@ -23,6 +24,7 @@ type Visitors = {
   array?: (array: AnyArray) => void
   func?: (func: AnyFunc) => void
   trap?: (message: string) => void
+  log?: (message: string) => void
 }
 const walkExpr = (e: AnyExpr, fns: Visitors) => {
   switch (e.kind) {
@@ -56,6 +58,7 @@ const walkStmt = (s: Stmt, fns: Visitors) => {
     case "continue":
       return
     case "trap": fns.trap?.(s.message); return
+    case "log": fns.log?.(s.message); walkExpr(s.value, fns); return
     case "return": if (s.value) walkExpr(s.value, fns); return
     case "call.void": fns.func?.(s.target); s.args.forEach(arg => walkExpr(arg, fns)); return
     case "expr": walkExpr(s.expr, fns); return
@@ -94,22 +97,27 @@ export type BuiltFunc = {
   functions: AnyFunc[]
   arrays: AnyArray[]
   traps: string[]
+  logs: string[]
 }
 
 const buildFunc = (func: AnyFunc): BuiltFunc => {
   const params = func.params.map(type => allocateLocal(type)) as Expr<NumType>[]
   const paramIds = params.map(p => p.kind === "local.get" ? p.local : -1)
-  const built = func.build(...params)
+  const result = func.build(...params)
+  const built = typeof func.result === "object" && !asStmts(result) ? result.packed : result
   const found = new Map<number, NumType>()
-  const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), traps = new Set<string>()
-  walkBody(built, { local: (id, type) => found.set(id, type), func: f => functions.add(f), array: a => arrays.add(a), trap: message => traps.add(message) })
+  const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), traps = new Set<string>(), logs = new Set<string>()
+  walkBody(built, {
+    local: (id, type) => found.set(id, type), func: f => functions.add(f), array: a => arrays.add(a),
+    trap: message => traps.add(message), log: message => logs.add(message),
+  })
   paramIds.forEach(id => found.delete(id))
   const locals = [...found.entries()]
   const localIndexes = Object.fromEntries([
     ...paramIds.map((id, i) => [id, i]),
     ...locals.map(([id], i) => [id, func.params.length + i]),
   ])
-  return { func, built, locals, localIndexes, functions: [...functions], arrays: [...arrays], traps: [...traps] }
+  return { func, built, locals, localIndexes, functions: [...functions], arrays: [...arrays], traps: [...traps], logs: [...logs] }
 }
 
 const buildReferencedFunctions = (roots: AnyFunc[]) => {
@@ -133,5 +141,6 @@ export const analyzeModule = <T extends ModuleDef>(mod: T) => {
   const allArrays = [...new Set([...builtFuncs.flatMap(func => func.arrays), ...Object.values(arrays) as AnyArray[]])]
   const { layouts, bytes } = arrayLayouts(allArrays)
   const trapMessages = [...new Set(builtFuncs.flatMap(func => func.traps))]
-  return { funcs, arrays, fEntries, builtFuncs, fix, layouts, trapMessages, pages: Math.max(1, Math.ceil(bytes / 65536)) } as ModuleAnalysis<T>
+  const logMessages = [...new Set(builtFuncs.flatMap(func => func.logs))]
+  return { funcs, arrays, fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages: Math.max(1, Math.ceil(bytes / 65536)) } as ModuleAnalysis<T>
 }

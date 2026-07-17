@@ -3,6 +3,7 @@ import type { Module } from "../types";
 import { hightLights } from "../view/main";
 import { baselineAnnealing, type AnnealingResult } from "./annealing_baseline";
 import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnnealingSession } from "./annealing_improved";
+import { annealingWasm } from "./annealing_wasm";
 import { getDeck, getReq, isLoad } from "./annealing_shared";
 
 type Solver = (mod: Module) => AnnealingResult;
@@ -252,4 +253,5 @@ export function plannerView(mod: Module): HTMLElement {
 export const availableSolvers = {
   baseline: baselineAnnealing,
   improved: improvedAnnealing,
+  wasm: annealingWasm,
 } as const;

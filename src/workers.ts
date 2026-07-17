@@ -1,10 +1,11 @@
-import type { ArgsVal, AnyFunc, CompileResult, ModuleDef, Value } from "./wasm";
+import { decodeStruct, type ArgsVal, type AnyFunc, type CompileResult, type ModuleDef, type Value } from "./wasm";
 
 type WorkerRequestPayload = {
   tag: "module"
   mod: WebAssembly.Module
   memory: WebAssembly.Memory
   trapMessages: string[]
+  logMessages: string[]
 } | {
   tag: "call"
   func: string
@@ -31,7 +32,8 @@ const workerBundleMain = () => {
     try {
       if (msg.tag === "module") {
         const trap = (id: number): never => { throw new Error(msg.trapMessages[id] ?? `Unknown WASM trap ${id}`) }
-        const instance = await WebAssembly.instantiate(msg.mod, { env: { memory: msg.memory, trap } })
+        const log = (id: number, value: number) => console.log(msg.logMessages[id] ?? `WASM log ${id}`, value)
+        const instance = await WebAssembly.instantiate(msg.mod, { env: { memory: msg.memory, trap, log } })
         funcs = Object.fromEntries(
           Object.entries(instance.exports).filter((entry): entry is [string, (...args: any[]) => any] => typeof entry[1] === "function"),
         )
@@ -103,7 +105,7 @@ export async function mkWorker<T extends ModuleDef>(mod: CompileResult<T>): Prom
   }
 
   try {
-    await request<void>({ tag: "module", mod: mod.mod, memory: mod.memory, trapMessages: mod.trapMessages })
+    await request<void>({ tag: "module", mod: mod.mod, memory: mod.memory, trapMessages: mod.trapMessages, logMessages: mod.logMessages })
   } catch (error) {
     terminated = true
     worker.terminate()
@@ -114,7 +116,11 @@ export async function mkWorker<T extends ModuleDef>(mod: CompileResult<T>): Prom
   const funcs = Object.fromEntries(
     Object.keys(mod)
       .filter(key => typeof mod[key] === "function")
-      .map(key => [key, (...args: unknown[]) => request({ tag: "call", func: key, args })]),
+      .map(key => [key, (...args: unknown[]) =>
+        request({ tag: "call", func: key, args }).then(value => {
+          const struct = mod.resultStructs[key]
+          return struct ? decodeStruct(struct, value as number | bigint) : value
+        })]),
   )
 
   return Object.assign(funcs, {
