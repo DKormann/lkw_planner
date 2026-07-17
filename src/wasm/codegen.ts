@@ -1,6 +1,6 @@
 import {
   type AnyArray, type AnyExpr, type AnyFunc, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
-  type ModuleDef, type NumType, type RemainderOp, type Stmt, type StorageType, asStmts,
+  type MemoryType, type ModuleDef, type NumType, type RemainderOp, type Stmt, asStmts,
 } from "./ast"
 import { type ArrayLayout, type ModuleAnalysis } from "./analyze"
 
@@ -20,9 +20,9 @@ const opcode = (op: ArithmeticOp | BitOp | RemainderOp | CmpOp, type: NumType) =
 
 const codes = {
   type: { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c } as Record<NumType, number>,
-  load: { i32: 0x28, i64: 0x29, f32: 0x2a, f64: 0x2b, i8: 0x2c, u8: 0x2d, i16: 0x2e, u16: 0x2f } as Record<StorageType, number>,
-  store: { i32: 0x36, i64: 0x37, f32: 0x38, f64: 0x39, i8: 0x3a, u8: 0x3a, i16: 0x3b, u16: 0x3b } as Record<StorageType, number>,
-  align: { i8: 0, u8: 0, i16: 1, u16: 1, i32: 2, f32: 2, i64: 3, f64: 3 } as Record<StorageType, number>,
+  load: { i32: 0x28, i64: 0x29, f32: 0x2a, f64: 0x2b, i8: 0x2c, u8: 0x2d, i16: 0x2e, u16: 0x2f } as Record<MemoryType, number>,
+  store: { i32: 0x36, i64: 0x37, f32: 0x38, f64: 0x39, i8: 0x3a, u8: 0x3a, i16: 0x3b, u16: 0x3b } as Record<MemoryType, number>,
+  align: { i8: 0, u8: 0, i16: 1, u16: 1, i32: 2, f32: 2, i64: 3, f64: 3 } as Record<MemoryType, number>,
   zero: { i32: [0x41, 0], i64: [0x42, 0], f32: [0x43, 0, 0, 0, 0], f64: [0x44, 0, 0, 0, 0, 0, 0, 0, 0] } as Record<NumType, number[]>,
 }
 
@@ -70,7 +70,7 @@ const die = (x: unknown): never => { throw new Error(`Unexpected value: ${String
 
 const addr = (layout: ArrayLayout, index: Expr<"i32">, stride = layout.elementSize, fieldOffset = 0) =>
   index.mul(stride).add(layout.offset + fieldOffset)
-const memarg = (type: StorageType, offset = 0) => [...u32(codes.align[type]), ...u32(offset)]
+const memarg = (type: MemoryType, offset = 0) => [...u32(codes.align[type]), ...u32(offset)]
 const constI32 = (e: Expr<"i32">) => e.kind === "const" ? e.value : null
 const checkArrayBounds = (layout: ArrayLayout, index: Expr<"i32">) => {
   const n = constI32(index)
@@ -127,7 +127,7 @@ const compileExpr = (e: AnyExpr): number[] => {
       const layout = arrays.get(e.array)
       if (!layout) throw new Error(`Unknown array ${e.array}`)
       checkArrayBounds(layout, e.index)
-      return [...compileExpr(addr(layout, e.index, e.stride, e.offset)), codes.load[e.storage as StorageType], ...memarg(e.storage as StorageType)]
+      return [...compileExpr(addr(layout, e.index, e.stride, e.offset)), codes.load[e.storage as MemoryType], ...memarg(e.storage as MemoryType)]
     }
     default:
       return die(e)

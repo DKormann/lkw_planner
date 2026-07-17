@@ -3,8 +3,9 @@ export type NumType = "i32" | "i64" | "f32" | "f64"
 export type ResultType = NumType | "void" | StructType<any>
 export type IntType = "i32" | "i64"
 export type PackedType = "i8" | "u8" | "i16" | "u16"
-export type StorageType = NumType | PackedType
-export type LoadedType<T extends StorageType> = T extends PackedType ? "i32" : T
+export type MemoryType = NumType | PackedType
+export type DType = MemoryType | StructType<any>
+export type LoadedType<T extends MemoryType> = T extends PackedType ? "i32" : T
 export type ArithmeticOp = "add" | "sub" | "mul" | "div"
 export type BitOp = "xor" | "shl" | "shr" | "and" | "or"
 export type RemainderOp = "mod" | "umod"
@@ -15,7 +16,7 @@ const bitOps = ["and", "or", "xor", "shl", "shr"] as const
 const remainderOps = ["mod", "umod"] as const
 const cmpOps = ["eq", "lt", "gt"] as const
 export type Value<T extends NumType> = T extends "i64" ? bigint : number
-export type TypedArrayFor<T extends StorageType> =
+export type TypedArrayFor<T extends MemoryType> =
   T extends "i8" ? Int8Array :
   T extends "u16" ? Uint16Array :
   T extends "i16" ? Int16Array :
@@ -37,7 +38,7 @@ export type CoreExpr<T extends NumType> =
   | { kind: "call", type: T, target: AnyFunc, args: Expr<NumType>[] }
   | { kind: "cast", type: T, inputType: NumType, unsigned: boolean, value: Expr<NumType> }
   | { kind: "if", type: T, cond: Expr<"i32">, then: Expr<T>, else: Expr<T> }
-  | { kind: "load", type: T, array: AnyArray, index: Expr<"i32">, storage: StorageType, stride: number, offset: number }
+  | { kind: "load", type: T, array: AnyArray, index: Expr<"i32">, storage: MemoryType, stride: number, offset: number }
   | (T extends "i32" ? { kind: "cmp", type: "i32", inputType: NumType, op: CmpOp, left: Expr<NumType>, right: Expr<NumType> } : never)
 
 class ExprMethods<T extends NumType> {}
@@ -50,7 +51,7 @@ export type AnyExpr = any
 
 export type Stmt =
   | { kind: "local.set", local: number, type: NumType, value: Expr<NumType> }
-  | { kind: "array.store", array: AnyArray, type: StorageType, index: Expr<"i32">, stride: number, offset: number, value: Expr<NumType> }
+  | { kind: "array.store", array: AnyArray, type: MemoryType, index: Expr<"i32">, stride: number, offset: number, value: Expr<NumType> }
   | { kind: "array.move", array: AnyArray, target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32"> }
   | { kind: "if", cond: Expr<"i32">, then: Stmt[], else: Stmt[] }
   | { kind: "block", control: number, body: Stmt[] }
@@ -77,12 +78,15 @@ type MutableInteger<T extends IntType> = { [Op in "and" | "or" | "xor" as `i${Op
 export type MutableValue<T extends NumType> = Expr<T> & { set(value: ExprLike<T>): Stmt } & MutableArithmetic<T> & (T extends IntType ? MutableInteger<T> : {})
 export type LocalVar<T extends NumType> = MutableValue<T> & LocalNode<T>
 
-export type ArrayHandle<T extends StorageType> = {
+export type ArrayValue<T extends DType> =
+  T extends StructType<infer F> ? MutableStruct<F> :
+  T extends MemoryType ? MutableValue<LoadedType<T>> : never
+export type ArrayHandle<T extends DType> = {
   kind: "array"
   type: T
   length: number
   elementSize: number
-  at(index: ExprLike<"i32">): MutableValue<LoadedType<T>>
+  at(index: ExprLike<"i32">): ArrayValue<T>
   move(target: ExprLike<"i32">, source: ExprLike<"i32">, count: ExprLike<"i32">): Stmt
 }
 
@@ -91,7 +95,7 @@ export type BitField = readonly [BitStorageType, number]
 export type StructStorageType = PackedType | IntType
 export type FieldType = StructStorageType | BitField
 export type StructFields = Record<string, FieldType>
-export type FieldStorage<T extends FieldType> = T extends readonly [infer S extends BitStorageType, number] ? S : Extract<T, StorageType>
+export type FieldStorage<T extends FieldType> = T extends readonly [infer S extends BitStorageType, number] ? S : Extract<T, MemoryType>
 export type FieldValue<T extends FieldType> = LoadedType<FieldStorage<T>>
 export type FieldLayout = { storage: StructStorageType, bitOffset: number, bits: number }
 export type StructType<F extends StructFields> = {
@@ -113,15 +117,6 @@ export type StructValue<F extends StructFields> = StructMembers<F> & { packed: A
 export type MutableStruct<F extends StructFields> = StructValue<F> & MutableStructMembers<F> & {
   set(value: MutableStruct<F> | StructInit<F>): Stmt
 }
-export type StructArrayHandle<F extends StructFields> = {
-  kind: "array"
-  type: StructType<F>
-  length: number
-  elementSize: number
-  at(index: ExprLike<"i32">): MutableStruct<F>
-  move(target: ExprLike<"i32">, source: ExprLike<"i32">, count: ExprLike<"i32">): Stmt
-}
-
 export type ExprLike<T extends NumType> = Expr<T> | Value<T>
 export type StmtBody = Stmt | StmtBody[]
 type ControlBody<H extends ControlHandle> = StmtBody | ((self: H) => StmtBody)
@@ -150,7 +145,7 @@ export type AnyFunc = {
 
 export type AnyArray = {
   kind: "array"
-  type: StorageType | StructType<any>
+  type: DType
   length: number
   elementSize: number
   at(...args: any[]): any
@@ -166,8 +161,8 @@ export type CompileResult<T extends ModuleDef> = {
       T[K]["result"] extends NumType ? Value<T[K]["result"]> :
       T[K]["result"] extends StructType<infer F> ? JSStruct<F> :
       void
-    : T[K] extends ArrayHandle<infer S> ? TypedArrayFor<S>
-    : T[K] extends StructArrayHandle<any> ? Uint8Array | Uint16Array | Uint32Array | BigUint64Array
+    : T[K] extends ArrayHandle<infer D> ?
+      D extends MemoryType ? TypedArrayFor<D> : Uint8Array | Uint16Array | Uint32Array | BigUint64Array
     : never
 } & {
   mod: WebAssembly.Module
@@ -262,11 +257,11 @@ const mkHandle = <A extends readonly NumType[], R extends ResultType>(
   return handle
 }
 
-const loadedType = <T extends StorageType>(type: T) =>
+const loadedType = <T extends MemoryType>(type: T) =>
   (type === "i8" || type === "u8" || type === "i16" || type === "u16" ? "i32" : type) as LoadedType<T>
 
-const storageSize: Record<StorageType, number> = { i8: 1, u8: 1, i16: 2, u16: 2, i32: 4, f32: 4, i64: 8, f64: 8 }
-const memoryValue = <T extends StorageType>(array: AnyArray, index: ExprLike<"i32">, storage: T, stride: number, offset = 0) => {
+const storageSize: Record<MemoryType, number> = { i8: 1, u8: 1, i16: 2, u16: 2, i32: 4, f32: 4, i64: 8, f64: 8 }
+const memoryValue = <T extends MemoryType>(array: AnyArray, index: ExprLike<"i32">, storage: T, stride: number, offset = 0) => {
   const at = lit("i32", index)
   return mutable({ kind: "load", type: loadedType(storage), array, index: at, storage, stride, offset }, value =>
     ({ kind: "array.store", array, type: storage, index: at, stride, offset, value: value as Expr<NumType> }))
@@ -415,22 +410,21 @@ export const { eq, lt, gt } = comparisons
 
 export const func = <const A extends readonly NumType[], R extends ResultType>(params: A, result: R, build: (...args: ArgsExpr<A>) => FuncBody<R>) =>
   mkHandle(params, result, build as (...args: readonly Expr<NumType>[]) => FuncBody<R>)
-export function array<T extends StorageType>(type: T, length: number): ArrayHandle<T>
-export function array<F extends StructFields>(type: StructType<F>, length: number): StructArrayHandle<F>
-export function array(type: StorageType | StructType<any>, length: number) {
+export function array<T extends DType>(type: T, length: number): ArrayHandle<T> {
   if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
-  const storage = typeof type === "string" ? type : type.storage
-  const elementSize = typeof type === "string" ? storageSize[type] : type.size
+  const struct = typeof type === "object" ? type : null
+  const storage: MemoryType = struct ? struct.storage : type as MemoryType
+  const elementSize = struct ? struct.size : storageSize[storage]
   let handle: AnyArray
   handle = {
     kind: "array", type, length, elementSize,
     at: index => {
       const value = memoryValue(handle, index, storage, elementSize)
-      return typeof type === "string" ? value : structValue(type, value)
+      return struct ? structValue(struct, value) : value
     },
     move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
   }
-  return handle
+  return handle as ArrayHandle<T>
 }
 
 const mkStructLocal = <F extends StructFields>(type: StructType<F>) =>

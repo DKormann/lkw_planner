@@ -6,30 +6,28 @@ import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnneali
 import { annealingWasm } from "./annealing_wasm";
 import { getDeck, getReq, isLoad } from "./annealing_shared";
 
-type Solver = (mod: Module) => AnnealingResult;
+export const availableSolvers = {
+  baseline: baselineAnnealing,
+  improved: improvedAnnealing,
+  wasm: annealingWasm,
+} as const;
+type SolverName = keyof typeof availableSolvers;
 
-const ACTIVE_SOLVER_NAME = "improved";
+const INITIAL_SOLVER: SolverName = "wasm";
 const KM_COST = 0.5;
 const AVG_SPEED_KMH = 60;
 const REORG_COST_EUR = 100;
 
-let annealer: AnnealingResult | null = null;
-let annealingSession: ImprovedAnnealingSession | null = null;
-let annealingTimer: number | null = null;
-let liveRender: (() => void) | null = null;
-
-export function plannerView(mod: Module): HTMLElement {
+export async function plannerView(mod: Module): Promise<HTMLElement> {
   const outerBorder = "1px solid " + color.gray;
   const innerBorder = "1px solid " + color.lightgray;
   const cellPadding = ".35em .5em";
   const scheduleCellMinHeight = "2.1em";
 
-  if (annealingSession == null) {
-    annealingSession = createImprovedAnnealingSession(mod, 1_900_000);
-    annealer = annealingSession.iterateForMs(10);
-  } else if (annealer == null) {
-    annealer = annealingSession.getResult();
-  }
+  let annealer: AnnealingResult | null = null;
+  let annealingSession: ImprovedAnnealingSession | null = null;
+  let annealingTimer: number | null = null;
+  let runId = 0;
 
   function itemButton(item: number, load?: boolean) {
     const req = mod.requests[item]!;
@@ -77,7 +75,10 @@ export function plannerView(mod: Module): HTMLElement {
   const controls = div(style({ display: "flex", gap: ".5em", alignItems: "center", flexWrap: "wrap" }));
   const scoreLine = p();
   const timeLine = p();
-  const solverLine = p("solver: ", ACTIVE_SOLVER_NAME);
+  const solverSelect = document.createElement("select");
+  for (const name of Object.keys(availableSolvers) as SolverName[]) solverSelect.add(new Option(name, name));
+  solverSelect.value = INITIAL_SOLVER;
+  const solverLine = p("solver: ", solverSelect);
   const unassignedLine = p();
   const detailWrap = div();
   const tableWrap = div(
@@ -173,6 +174,7 @@ export function plannerView(mod: Module): HTMLElement {
   }
 
   function renderStatus() {
+    if (!annealer) return;
     scoreLine.textContent = `score: ${annealer?.totalScore ?? 0}`;
     timeLine.textContent = `search time: ${(annealer!.elapsedMs/1000).toFixed(2)} s`;
     unassignedLine.replaceChildren(
@@ -204,11 +206,44 @@ export function plannerView(mod: Module): HTMLElement {
   }
 
   function render(forceTable = false) {
+    if (!annealer) return;
     renderStatus();
     if (forceTable || (renderCounter++ % 4 === 0)) renderTable();
   }
 
+  async function runSolver(name: SolverName) {
+    stopSearch();
+    const id = ++runId;
+    annealingSession = null;
+    annealer = null;
+    runButton.disabled = true;
+    scoreLine.textContent = "running…";
+    tableWrap.replaceChildren();
+    try {
+      if (name === "improved") {
+        annealingSession = createImprovedAnnealingSession(mod, 1_900_000);
+        annealer = annealingSession.iterateForMs(10);
+      } else {
+        annealer = await availableSolvers[name](mod);
+      }
+      if (id === runId) render(true);
+    } catch (error) {
+      if (id === runId) scoreLine.textContent = `solver failed: ${String(error)}`;
+    } finally {
+      if (id === runId) {
+        runButton.disabled = false;
+        runButton.textContent = name === "improved" ? "start" : "run";
+        heatButton.hidden = name !== "improved";
+      }
+    }
+  }
+
   runButton.onclick = () => {
+    const name = solverSelect.value as SolverName;
+    if (name !== "improved") {
+      void runSolver(name);
+      return;
+    }
     if (annealingTimer != null) {
       stopSearch();
       return;
@@ -227,9 +262,9 @@ export function plannerView(mod: Module): HTMLElement {
     render(true);
   };
 
-  liveRender = () => render(true);
-  render(true);
+  solverSelect.onchange = () => void runSolver(solverSelect.value as SolverName);
   controls.replaceChildren(runButton, heatButton);
+  await runSolver(INITIAL_SOLVER);
 
   return div(
     style({
@@ -249,9 +284,3 @@ export function plannerView(mod: Module): HTMLElement {
     unassignedLine,
   );
 }
-
-export const availableSolvers = {
-  baseline: baselineAnnealing,
-  improved: improvedAnnealing,
-  wasm: annealingWasm,
-} as const;

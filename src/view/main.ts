@@ -4,7 +4,7 @@ import { mapView } from "./mapView";
 import { randomMap } from "../roadmap";
 import { randomModule, randomUUID, Request, Schedule, UUID } from "../types";
 import { mkStored, mkWritable, type Writable } from "../writeable";
-import { randChoice, random, setRandSeed } from "../random";
+import { setRandSeed } from "../random";
 import { number } from "../schema";
 import { plannerView } from "../planners/annealing";
 import { setUpWasm, wasmView } from "./wasmview";
@@ -64,11 +64,11 @@ function setter (store: Writable<number> ){
 
 await setUpWasm(module)
 
-function mkWindow (tab: number = 0 ) {
+async function mkWindow (tab: number = 0 ) {
 
   let tabFields = [
     ['map', mapView(module)],
-    ['planner', plannerView(module)],
+    ['planner', await plannerView(module)],
     ['wasm', wasmView(module)]
   ] as const
 
@@ -123,4 +123,4 @@ function mkWindow (tab: number = 0 ) {
   return el
 }
 
-contentSpace.replaceChildren(mkWindow(2 ), mkWindow())
+contentSpace.replaceChildren(...await Promise.all([mkWindow(1), mkWindow()]))

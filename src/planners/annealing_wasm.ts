@@ -1,48 +1,41 @@
 import type { Module } from "../types"
-import { array, compile, func, i32, ifElse, lit, local, log, ret, struct, trap, umod, type AnyArray, type ArrayHandle, type Expr, type ExprLike, type Stmt, type StmtBody, type StorageType, type StructArrayHandle, type StructFields, type StructType } from "../wasm"
+import { array, compile, func, i32, ifElse, lit, local, log, loop, ret, struct, trap, umod, type AnyArray, type ArrayHandle, type DType, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
 import type { AnnealingResult } from "./annealing_baseline"
 
 const NWORKERS = 4
 const RANDSTRIDE = 16
 
-
-
 let DEBUG = true
 
 function debug (tag: string, value: ExprLike<"i32">){
   if (!DEBUG) return []
-  return [
-    log(tag, value)
-  ]
+  return [ log(tag, value) ]
 }
 
+function checkedArray<T extends DType>(type: T, length: number): ArrayHandle<T> {
+  const arr = array(type, length) as AnyArray
+  if (!DEBUG) return arr as ArrayHandle<T>
 
-
-const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
-  const i = lit("i32", index), n = lit("i32", count)
-  return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
-}
-
-
-function checkedArray<T extends StorageType>(type: T, length: number): ArrayHandle<T>
-function checkedArray<F extends StructFields>(type: StructType<F>, length: number): StructArrayHandle<F>
-function checkedArray(type: StorageType | StructType<any>, length: number) {
-  const arr = array(type as StorageType, length) as AnyArray
-  const at = arr.at, move = arr.move
-  const checkedIndex = func(["i32", "i32"], "i32", (index, count) => [
-    boundsCheck(arr, index, count),
-    ret(index),
-  ])
-  arr.at = index => at(checkedIndex.call(index, 1))
+  const {at, move} = arr
+  const checkIdx = func(["i32", "i32"], "i32", (i,n)=> ifElse(
+      i.lt(0).or(n.lt(0)).or (n.add(i).gt(arr.length)),
+      trap( "array bounds exceeded"),
+      ret(i)
+    )
+  );
+  arr.at = index => at(checkIdx.call(index, 0))
   arr.move = (target, source, count) => move(
-    checkedIndex.call(target, count),
-    checkedIndex.call(source, count),
+    checkIdx.call(target, count),
+    checkIdx.call(source, count),
     count,
   )
-  return arr
+  return arr as ArrayHandle<T>
 }
 
-
+function forN(n: number, body: (i: Expr<"i32">) => StmtBody): StmtBody {
+  const i = local("i32")
+  return loop( i.lt(n),[body(i), i.set(i.add(1))],)
+}
 
 export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   const TSIZE = Math.floor(planner.NREQS / planner.NTRANS * 2.5 * 2 + 10)
@@ -79,8 +72,6 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   })
   const randint = func(["i32", "i32"], "i32", (gid, max) => umod(randNext.call(gid), max))
 
-
-
   const tryAssign = func([], "void", () => {
     const tran = local("i32")
     const req_id = local("i32")
@@ -90,7 +81,6 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     const tsize = local("i32")
     const toffset = local("i32")
 
-
     const schedView = {
       move: (target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32">): StmtBody =>
         schedule.move(toffset.add(target), toffset.add(source), count),
@@ -98,8 +88,6 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     }
 
     return [
-
-
       tran.set(randint.call(0, planner.NTRANS)),
       req_id.set(randint.call(0, planner.NREQS)),
       ifElse(assigned.at(req_id).eq(1), ret(), assigned.at(req_id).set(1)),
@@ -118,17 +106,26 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     ]
   })
 
+  const rateTran = func(["i32"], "i32", tran => {
+
+    
+
+    return [
+
+    ]
+
+  })
+
+
+
   const addRequest = func(["i32", "i32", "i32", "i32", "i32"], "void",
     (reqn, start, end, value, deadline) =>
       requests.at(reqn).set({ start, end, value, deadline }),
   )
+
   const search = func([], "void", () => [
-
     debug("debugger on.", 0),
-
-    tryAssign.call(),
-    tryAssign.call(),
-    tryAssign.call(),
+    forN(100, i=> tryAssign.call())
   ])
   const getStop = func(["i32", "i32"], STOP,
     (tran, index) => schedule.at(tran.mul(TSIZE).add(index)),

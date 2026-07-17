@@ -275,9 +275,9 @@ export function createImprovedAnnealingSession(mod: Module, targetSteps = 150000
 }
 
 function improvedAnnealingCore(mod: Module, options: ImprovedOptions): AnnealingResult {
-  const targetSteps = "steps" in options ? options.steps : Math.max(150000, Math.floor(options.budgetMs * 190));
+  const targetSteps = options.steps !== undefined ? options.steps : Math.max(150000, Math.floor(options.budgetMs * 190));
   const session = createImprovedAnnealingSession(mod, targetSteps);
-  if ("steps" in options) return session.iterateSteps(options.steps);
+  if (options.steps !== undefined) return session.iterateSteps(options.steps);
   return session.iterateForMs(options.budgetMs);
 }
 
