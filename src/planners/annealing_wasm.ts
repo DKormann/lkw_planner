@@ -1,10 +1,8 @@
 import type { Module } from "../types"
-import { array, compile, func, i32, ifElse, lit, local, log, loop, ret, struct, trap, umod, type AnyArray, type ArrayHandle, type DType, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
+import { array, compile, exp, f32, func, global, i32, i64u, ifElse, lit, local, log, loop, ret, struct, trap, type AnyArray, type ArrayHandle, type DType, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
 import type { AnnealingResult } from "./annealing_baseline"
 import { AVG_SPEED_KMH, INF, KM_COST_CENTS, REORG_COST_CENTS } from "./annealing_shared"
 
-const NWORKERS = 4
-const RANDSTRIDE = 16
 const SEARCH_STEPS = 1_600_000
 const TEMP_PHASES = 1_000
 const STEPS_PER_PHASE = Math.floor(SEARCH_STEPS / TEMP_PHASES)
@@ -58,30 +56,30 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     deadline: "u16",
   })
 
-  const randState      = checkedArray("i32", NWORKERS * RANDSTRIDE)
+  const randState      = global("i32", 1)
   const dists          = checkedArray("i32", planner.RSIZE)
   const requests       = checkedArray(REQ, planner.NREQS)
   const assigned       = checkedArray("u8", planner.NREQS)
   const schedule       = checkedArray(STOP, planner.NTRANS * TSIZE)
   const sched_size     = checkedArray("i16", planner.NTRANS)
+  const ratings        = checkedArray("i32", planner.NTRANS)
   const tran_positions = checkedArray("i16", planner.NTRANS)
 
-  const randNext = func(["i32"], "i32", gid => {
-    const value = local("i32")
+  const randNext = func([], "i32", () => {
     return [
-      value.set(randState.at(gid.mul(RANDSTRIDE))),
-      value.set(value.xor(value.shl(13))),
-      value.set(value.xor(value.shr(17))),
-      value.set(value.xor(value.shl(5))),
-      randState.at(gid.mul(RANDSTRIDE)).set(value),
-      ret(value),
+      randState.set(randState.xor(randState.shl(13))),
+      randState.set(randState.xor(randState.shr(17))),
+      randState.set(randState.xor(randState.shl(5))),
+      ret(randState),
     ]
   })
-  const randint = func(["i32", "i32"], "i32", (gid, max) => umod(randNext.call(gid), max))
+  const randint = func(["i32"], "i32", max =>
+    i32(i64u(randNext.call()).mul(i64u(max)).shr(32n)))
   const acceptAnneal = func(["i32", "i32", "i32"], "i32", (previous, next, temperature) => [
     ifElse(previous.gt(next),
-      ret(randint.call(0, temperature.add(previous.sub(next))).lt(temperature)
-        .and(randint.call(0, temperature.add(previous.sub(next))).lt(temperature))),
+      ret(randint.call(1_000_000).lt(i32(exp(
+        f32(next.sub(previous)).div(f32(temperature)),
+      ).mul(1_000_000)))),
       ret(1),
     ),
   ])
@@ -115,25 +113,25 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     }
 
     return [
-      tran.set(randint.call(0, planner.NTRANS)),
-      req_id.set(randint.call(0, planner.NREQS)),
+      tran.set(randint.call(planner.NTRANS)),
+      req_id.set(randint.call(planner.NREQS)),
       ifElse(assigned.at(req_id).eq(1), ret()),
       toffset.set(tran.mul(TSIZE)),
       tsize.set(sched_size.at(tran)),
       ifElse(tsize.gt(TSIZE - 2), ret()),
-      previousScore.set(rateTran.call(tran)),
-      A.set(randint.call(0, tsize.add(1))),
-      B.set(A.add(randint.call(0, 4))),
+      previousScore.set(ratings.at(tran)),
+      A.set(randint.call(tsize.add(1))),
+      B.set(A.add(randint.call(4))),
       ifElse(B.gt(tsize), B.set(tsize)),
       schedView.move(B.add(2), B, tsize.sub(B)),
       schedView.move(A.add(1), A, B.sub(A)),
-      tmp.set(randint.call(0, 2)),
+      tmp.set(randint.call(2)),
       schedView.at(A).set({ req_id, is_load: 1, deck: tmp }),
       schedView.at(B.add(1)).set({ req_id, is_load: 0, deck: tmp }),
       sched_size.at(tran).set(tsize.add(2)),
       nextScore.set(rateTran.call(tran)),
       ifElse(acceptAnneal.call(previousScore, nextScore, temperature),
-        assigned.at(req_id).set(1),
+        [assigned.at(req_id).set(1), ratings.at(tran).set(nextScore)],
         [
           schedView.move(A, A.add(1), B.sub(A)),
           schedView.move(B, B.add(2), tsize.sub(B)),
@@ -204,11 +202,11 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
       at: (index: Expr<"i32">) => schedule.at(toffset.add(index)),
     }
     return [
-      tran.set(randint.call(0, planner.NTRANS)),
+      tran.set(randint.call(planner.NTRANS)),
       tsize.set(sched_size.at(tran)),
       ifElse(tsize.lt(2), ret()),
       toffset.set(tran.mul(TSIZE)),
-      step.set(schedView.at(randint.call(0, tsize))),
+      step.set(schedView.at(randint.call(tsize))),
       req.set(step.req_id),
       deck.set(step.deck),
       A.set(-1), B.set(-1),
@@ -218,13 +216,13 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
         i.iadd(1),
       ]),
       ifElse(A.eq(-1).or(B.eq(-1)), ret()),
-      previousScore.set(rateTran.call(tran)),
+      previousScore.set(ratings.at(tran)),
       schedView.move(A, A.add(1), B.sub(A).sub(1)),
       schedView.move(B.sub(1), B.add(1), tsize.sub(B).sub(1)),
       sched_size.at(tran).set(tsize.sub(2)),
       nextScore.set(rateTran.call(tran)),
       ifElse(acceptAnneal.call(previousScore, nextScore, temperature),
-        assigned.at(req).set(0),
+        [assigned.at(req).set(0), ratings.at(tran).set(nextScore)],
         [
           schedView.move(B.add(1), B.sub(1), tsize.sub(B).sub(1)),
           schedView.move(A.add(1), A, B.sub(A).sub(1)),
@@ -262,6 +260,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
         schedule.at(offset.add(1)).set({ req_id: bestReq, is_load: 0, deck: 0 }),
         sched_size.at(tran).set(2),
         assigned.at(bestReq).set(1),
+        ratings.at(tran).set(bestScore),
       ]),
     ])
   })
@@ -289,7 +288,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     dists,
     getStop,
     rateTran,
-    randState,
+    ratings,
     schedule,
     search,
     sched_size,
@@ -297,7 +296,6 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   })
 
   wasm.dists.set(planner.roadmap.CostMatrix)
-  wasm.randState.set(Array.from({ length: NWORKERS * 2 }, (_, i) => i + 1))
   wasm.tran_positions.set(planner.startpositions)
   planner.requests.forEach((request, i) =>
     wasm.addRequest(i, request.startPoint, request.endPoint, Math.round(request.value_eur * 100), Math.floor(request.deadline_h * 60)),
@@ -317,7 +315,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   }
   const unassigned = new Int8Array(planner.NREQS)
   for (let i = 0; i < unassigned.length; i++) unassigned[i] = wasm.assigned[i] ? 0 : 1
-  const scheduleRatings = new Int32Array(Array.from({ length: planner.NTRANS }, (_, tran) => wasm.rateTran(tran)))
+  const scheduleRatings = new Int32Array(wasm.ratings)
 
   return {
     schedule: resultSchedule,

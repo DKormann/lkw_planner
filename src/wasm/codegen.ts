@@ -1,5 +1,5 @@
 import {
-  type AnyArray, type AnyExpr, type AnyFunc, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
+  type AnyArray, type AnyExpr, type AnyFunc, type AnyGlobal, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
   type MemoryType, type ModuleDef, type NumType, type RemainderOp, type Stmt, asStmts,
 } from "./ast"
 import { type ArrayLayout, type ModuleAnalysis } from "./analyze"
@@ -58,6 +58,12 @@ const fN = (value: number, bytes: 4 | 8) => {
   return [...out]
 }
 
+const globalInit = (value: AnyGlobal) =>
+  value.type === "i32" ? [0x41, ...sN(value.initial as number, 32)] :
+  value.type === "i64" ? [0x42, ...sN(value.initial, 64)] :
+  value.type === "f32" ? [0x43, ...fN(value.initial as number, 4)] :
+  [0x44, ...fN(value.initial as number, 8)]
+
 const str = (s: string) => {
   const bytes = new TextEncoder().encode(s)
   return [...u32(bytes.length), ...bytes]
@@ -87,7 +93,7 @@ const checkMoveBounds = (layout: ArrayLayout, target: Expr<"i32">, source: Expr<
 
 const makeCompiler = (
   fix: Map<AnyFunc, number>, lix: Record<number, number>, arrays: Map<AnyArray, ArrayLayout>,
-  traps: Map<string, number>, logs: Map<string, number>,
+  traps: Map<string, number>, logs: Map<string, number>, globals: Map<AnyGlobal, number>,
 ) => {
 const compileExpr = (e: AnyExpr): number[] => {
   switch (e.kind) {
@@ -99,6 +105,8 @@ const compileExpr = (e: AnyExpr): number[] => {
       return die(e)
     case "local.get":
       return [0x20, ...u32(lix[e.local]!)]
+    case "global.get":
+      return [0x23, ...u32(globals.get(e)!)]
     case "bin": {
       return [...compileExpr(e.left), ...compileExpr(e.right), opcode(e.op, e.type)]
     }
@@ -111,6 +119,8 @@ const compileExpr = (e: AnyExpr): number[] => {
       const to = e.type as NumType
       let opcode: number | undefined
       if (to === "i32" && from === "i64") opcode = 0xa7
+      if (to === "i32" && from === "f32") opcode = 0xa8
+      if (to === "i32" && from === "f64") opcode = 0xaa
       if (to === "i64" && from === "i32") opcode = e.unsigned ? 0xad : 0xac
       if (to === "f32" && from === "i32") opcode = 0xb2
       if (to === "f32" && from === "i64") opcode = 0xb4
@@ -145,6 +155,8 @@ const compileStmt = (s: Stmt, stack: LabelFrame[] = []): number[] => {
   switch (s.kind) {
     case "local.set":
       return [...compileExpr(s.value), 0x21, ...u32(lix[s.local]!)]
+    case "global.set":
+      return [...compileExpr(s.value), 0x24, ...u32(globals.get(s.global)!)]
     case "array.store": {
       const layout = arrays.get(s.array)
       if (!layout) throw new Error(`Unknown array ${s.array}`)
@@ -192,7 +204,7 @@ return { expr: compileExpr, stmt: compileStmt }
 }
 
 
-export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages }: ModuleAnalysis<T>) => {
+export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, layouts, globals, trapMessages, logMessages, pages }: ModuleAnalysis<T>) => {
   const traps = new Map(trapMessages.map((message, id) => [message, id]))
   const logs = new Map(logMessages.map((message, id) => [message, id]))
   const functionSection = builtFuncs.flatMap((_, i) => u32(i + 2))
@@ -224,11 +236,12 @@ export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, lay
       ...u32(pages),
     ]),
     ...section(0x03, [...u32(builtFuncs.length), ...functionSection]),
+    ...(globals.size ? section(0x06, [...u32(globals.size), ...[...globals].flatMap(([value]) => [codes.type[value.type], 0x01, ...globalInit(value), 0x0b])]) : []),
     ...section(0x07, [...u32(fEntries.length), ...exportSection]),
     ...section(0x0a, [
       ...u32(builtFuncs.length),
       ...flatMap(builtFuncs, ({ func, built, locals, localIndexes }) => {
-        const compiler = makeCompiler(fix, localIndexes, layouts, traps, logs)
+        const compiler = makeCompiler(fix, localIndexes, layouts, traps, logs, globals)
         const stmts = asStmts(built)
         const decls = [...u32(locals.length), ...flatMap(locals, ([, type]) => [...u32(1), codes.type[type]])]
         const result = resultType(func.result)

@@ -1,10 +1,24 @@
-import { array, boundsCheck, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
+import { array, boundsCheck, compile, exp, f32, formatModule, func, global, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
 import { annealingWasm } from "../src/planners/annealing_wasm"
 import { initAnnealingState, insertStops, getReq, isLoad, KM_COST_CENTS, scoreRoute, type AnnealingState } from "../src/planners/annealing_shared"
 import { randomModule } from "../src/types"
 import { assert, runTests } from "./tests"
 
 await runTests(
+  async function mutableGlobals() {
+    const state = global("i32", 3)
+    const advance = func([], "i32", () => [state.iadd(2), ret(state)])
+    const mod = await compile({ advance })
+    assert(mod.advance() === 5 && mod.advance() === 7, "mutable globals should persist across calls")
+  },
+
+  async function approximateExp() {
+    const evaluate = func(["f32"], "f32", x => exp(x))
+    const mod = await compile({ evaluate })
+    for (const x of [-10, -5, -2, -1, 0, 1, 2])
+      assert(Math.abs(mod.evaluate(x) / Math.exp(x) - 1) < .05, `exp approximation should be close at ${x}`)
+  },
+
   async function integerExpressions() {
     const { xorSelf } = await compile({
       xorSelf: func(["i32"], "i32", x => x.xor(x)),

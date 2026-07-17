@@ -31,9 +31,11 @@ type ArgsLike<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] ex
 export type ArgsVal<Args extends readonly NumType[]>  = { [K in keyof Args]: Args[K] extends NumType ? Value<Args[K]> : never }
 
 type LocalNode<T extends NumType> = { kind: "local.get", type: T, local: number }
+type GlobalNode<T extends NumType> = { kind: "global.get", type: T, initial: Value<T> }
 export type CoreExpr<T extends NumType> =
   | { kind: "const", type: T, value: Value<T> }
   | LocalNode<T>
+  | GlobalNode<T>
   | { kind: "bin", type: T, op: BinOp, left: Expr<T>, right: Expr<T> }
   | { kind: "call", type: T, target: AnyFunc, args: Expr<NumType>[] }
   | { kind: "cast", type: T, inputType: NumType, unsigned: boolean, value: Expr<NumType> }
@@ -51,6 +53,7 @@ export type AnyExpr = any
 
 export type Stmt =
   | { kind: "local.set", local: number, type: NumType, value: Expr<NumType> }
+  | { kind: "global.set", global: AnyGlobal, value: Expr<NumType> }
   | { kind: "array.store", array: AnyArray, type: MemoryType, index: Expr<"i32">, stride: number, offset: number, value: Expr<NumType> }
   | { kind: "array.move", array: AnyArray, target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32"> }
   | { kind: "if", cond: Expr<"i32">, then: Stmt[], else: Stmt[] }
@@ -77,6 +80,8 @@ type MutableArithmetic<T extends NumType> = { [Op in ArithmeticOp as `i${Op}`]: 
 type MutableInteger<T extends IntType> = { [Op in "and" | "or" | "xor" as `i${Op}`]: (right: ExprLike<T>) => Stmt }
 export type MutableValue<T extends NumType> = Expr<T> & { set(value: ExprLike<T>): Stmt } & MutableArithmetic<T> & (T extends IntType ? MutableInteger<T> : {})
 export type LocalVar<T extends NumType> = MutableValue<T> & LocalNode<T>
+export type GlobalValue<T extends NumType> = MutableValue<T> & GlobalNode<T>
+export type AnyGlobal = GlobalValue<NumType>
 
 export type ArrayValue<T extends DType> =
   T extends StructType<infer F> ? MutableStruct<F> :
@@ -152,7 +157,7 @@ export type AnyArray = {
   move(...args: any[]): Stmt
 }
 
-export type ModuleDef = Record<string, AnyFunc | AnyArray>
+export type ModuleDef = Record<string, AnyFunc | AnyArray | AnyGlobal>
 export type FuncDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyFunc ? K : never]: Extract<T[K], AnyFunc> }
 export type ArrayDefs<T extends ModuleDef> = { [K in keyof T as T[K] extends AnyArray ? K : never]: Extract<T[K], AnyArray> }
 export type CompileResult<T extends ModuleDef> = {
@@ -195,7 +200,7 @@ const mutable = <T extends NumType>(node: CoreExpr<T>, write: (value: Expr<T>) =
 const isStmt = (x: unknown): x is Stmt =>
   !!x && typeof x === "object" && "kind" in x && (
     (x as Stmt).kind === "if" ? Array.isArray((x as { then?: unknown }).then) :
-    !["const", "local.get", "bin", "call", "cast", "load", "cmp"].includes((x as { kind: string }).kind)
+    !["const", "local.get", "global.get", "bin", "call", "cast", "load", "cmp"].includes((x as { kind: string }).kind)
   )
 
 const stmtList = (body: StmtBody): Stmt[] => Array.isArray(body) ? body.flatMap(stmtList) : [body]
@@ -349,7 +354,7 @@ const number = <T extends NumType>(type: T, value: unknown): Expr<T> =>
     : cast(type, value as Expr<NumType>)
 
 export function i32(value: number): Expr<"i32">
-export function i32<T extends IntType>(value: Expr<T>): Expr<"i32">
+export function i32<T extends NumType>(value: Expr<T>): Expr<"i32">
 export function i32(value: unknown) { return number("i32", value) }
 
 export function i64(value: bigint): Expr<"i64">
@@ -437,6 +442,23 @@ type LocalFactory = {
 
 export const local = (<T extends NumType, F extends StructFields>(type: T | StructType<F>) =>
   typeof type === "string" ? mkLocal(type) : mkStructLocal(type)) as LocalFactory
+
+const expImpl = func(["f32"], "f32", x => {
+  const y = local("f32")
+  return [
+    y.set(ifElse(x.lt(-16), f32(-16), ifElse(x.gt(16), f32(16), x)).div(2048).add(1)),
+    ...Array.from({ length: 11 }, () => y.imul(y)),
+    ret(y),
+  ]
+})
+export const exp = (value: ExprLike<"f32">) => expImpl.call(value)
+
+export const global = <T extends NumType>(type: T, initial: Value<T>): GlobalValue<T> => {
+  let value!: GlobalValue<T>
+  value = mutable({ kind: "global.get", type, initial }, input =>
+    ({ kind: "global.set", global: value as unknown as AnyGlobal, value: input as Expr<NumType> })) as GlobalValue<T>
+  return value
+}
 
 export function ret(): Stmt
 export function ret<T extends NumType>(value: ExprLike<T>): Stmt

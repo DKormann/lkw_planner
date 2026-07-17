@@ -45,6 +45,7 @@ const formatFunction = (
     switch (value.kind) {
       case "const": return typeof value.value === "bigint" ? `${value.value}n` : String(value.value)
       case "local.get": return locals.get(value.local)!
+      case "global.get": return "global"
       case "bin": return `(${expr(value.left)} ${binary[value.op]} ${expr(value.right)})`
       case "cmp": return `(${expr(value.left)} ${binary[value.op]} ${expr(value.right)})`
       case "call": return `${functions.get(value.target)}(${value.args.map(expr).join(", ")})`
@@ -59,6 +60,7 @@ const formatFunction = (
     const nested = (items: Stmt[]) => lines(items, indent + "  ")
     switch (statement.kind) {
       case "local.set": return [`${indent}${locals.get(statement.local)} = ${expr(statement.value)};`]
+      case "global.set": return [`${indent}global = ${expr(statement.value)};`]
       case "array.store": return [`${indent}store_${statement.type}(${arrays.get(statement.array)}, ${address(statement, expr)}, ${expr(statement.value)});`]
       case "array.move": return [`${indent}memory_copy(${arrays.get(statement.array)}, ${expr(statement.target)}, ${expr(statement.source)}, ${expr(statement.count)});`]
       case "if": return [

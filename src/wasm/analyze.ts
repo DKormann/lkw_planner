@@ -1,6 +1,6 @@
 import {
   allocateLocal, asStmts,
-  type AnyArray, type AnyFunc, type ArrayDefs, type Expr,
+  type AnyArray, type AnyFunc, type AnyGlobal, type ArrayDefs, type Expr,
   type FuncBody, type FuncDefs, type ModuleDef, type NumType, type ResultType,
 } from "./ast"
 
@@ -13,6 +13,7 @@ export type ModuleAnalysis<T extends ModuleDef> = {
   builtFuncs: BuiltFunc[]
   fix: Map<AnyFunc, number>
   layouts: Map<AnyArray, ArrayLayout>
+  globals: Map<AnyGlobal, number>
   trapMessages: string[]
   logMessages: string[]
   pages: number
@@ -22,6 +23,7 @@ type Visitors = {
   local?: (id: number, type: NumType) => void
   array?: (array: AnyArray) => void
   func?: (func: AnyFunc) => void
+  global?: (global: AnyGlobal) => void
   trap?: (message: string) => void
   log?: (message: string) => void
 }
@@ -33,6 +35,8 @@ const walk = (node: any, fns: Visitors): void => {
     case "const": case "break": case "continue": return
     case "local.get": fns.local?.(node.local, node.type); return
     case "local.set": fns.local?.(node.local, node.type); return walk(node.value, fns)
+    case "global.get": fns.global?.(node); return
+    case "global.set": fns.global?.(node.global); return walk(node.value, fns)
     case "bin": case "cmp": return children(node.left, node.right)
     case "call": case "call.void": fns.func?.(node.target); return walk(node.args, fns)
     case "cast": case "return": return walk(node.value, fns)
@@ -71,6 +75,7 @@ export type BuiltFunc = {
   arrays: AnyArray[]
   traps: string[]
   logs: string[]
+  globals: AnyGlobal[]
 }
 
 const buildFunc = (func: AnyFunc): BuiltFunc => {
@@ -79,10 +84,10 @@ const buildFunc = (func: AnyFunc): BuiltFunc => {
   const result = func.build(...params)
   const built = typeof func.result === "object" && !asStmts(result) ? result.packed : result
   const found = new Map<number, NumType>()
-  const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), traps = new Set<string>(), logs = new Set<string>()
+  const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), globals = new Set<AnyGlobal>(), traps = new Set<string>(), logs = new Set<string>()
   walk(built, {
     local: (id, type) => found.set(id, type), func: f => functions.add(f), array: a => arrays.add(a),
-    trap: message => traps.add(message), log: message => logs.add(message),
+    global: value => globals.add(value), trap: message => traps.add(message), log: message => logs.add(message),
   })
   paramIds.forEach(id => found.delete(id))
   const locals = [...found.entries()]
@@ -90,7 +95,7 @@ const buildFunc = (func: AnyFunc): BuiltFunc => {
     ...paramIds.map((id, i) => [id, i]),
     ...locals.map(([id], i) => [id, func.params.length + i]),
   ])
-  return { func, built, locals, localIndexes, functions: [...functions], arrays: [...arrays], traps: [...traps], logs: [...logs] }
+  return { func, built, locals, localIndexes, functions: [...functions], arrays: [...arrays], globals: [...globals], traps: [...traps], logs: [...logs] }
 }
 
 const buildReferencedFunctions = (roots: AnyFunc[]) => {
@@ -113,8 +118,10 @@ export const analyzeModule = <T extends ModuleDef>(mod: T) => {
   const builtFuncs = buildReferencedFunctions(fEntries.map(([, func]) => func))
   const fix = new Map(builtFuncs.map(({ func }, i) => [func, i]))
   const allArrays = [...new Set([...builtFuncs.flatMap(func => func.arrays), ...Object.values(arrays) as AnyArray[]])]
+  const allGlobals = [...new Set([...builtFuncs.flatMap(func => func.globals), ...entries.filter(([, v]) => v.kind === "global.get").map(([, v]) => v as AnyGlobal)])]
+  const globals = new Map(allGlobals.map((value, i) => [value, i]))
   const { layouts, bytes } = arrayLayouts(allArrays)
   const trapMessages = [...new Set(builtFuncs.flatMap(func => func.traps))]
   const logMessages = [...new Set(builtFuncs.flatMap(func => func.logs))]
-  return { funcs, arrays, fEntries, builtFuncs, fix, layouts, trapMessages, logMessages, pages: Math.max(1, Math.ceil(bytes / 65536)) } as ModuleAnalysis<T>
+  return { funcs, arrays, fEntries, builtFuncs, fix, layouts, globals, trapMessages, logMessages, pages: Math.max(1, Math.ceil(bytes / 65536)) } as ModuleAnalysis<T>
 }

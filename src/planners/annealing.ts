@@ -4,7 +4,7 @@ import { hightLights } from "../view/main";
 import { baselineAnnealing, type AnnealingResult } from "./annealing_baseline";
 import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnnealingSession } from "./annealing_improved";
 import { annealingWasm } from "./annealing_wasm";
-import { AVG_SPEED_KMH, getDeck, getReq, INF, initAnnealingState, isLoad, KM_COST_CENTS, REORG_COST_CENTS, scoreRoute } from "./annealing_shared";
+import { AVG_SPEED_KMH, getDeck, getReq, initAnnealingState, isLoad, KM_COST_CENTS, REORG_COST_CENTS, scoreRoute } from "./annealing_shared";
 
 export const availableSolvers = {
   baseline: baselineAnnealing,
@@ -59,81 +59,6 @@ function checkedResult(mod: Module, result: AnnealingResult) {
   if (result.totalScore !== total)
     throw new ScoreMismatchError(`Total score mismatch: reported ${result.totalScore}, JS ${total}`)
   return result
-}
-
-function makeReport(mod: Module, solver: SolverName, result: AnnealingResult) {
-  const schedule = canonicalSchedule(mod, result)
-  const routes = Array.from({length: mod.NTRANS}, (_, tran) => {
-    const decks: [number[], number[]] = [[], []]
-    const steps = []
-    let pos = result.tranStart[tran]!, elapsedMinutes = 0, rewardCents = 0, costCents = 0
-    let invalid: string | null = null
-    for (let i = 0; i < result.scheduleSizes[tran]!; i++) {
-      const packed = schedule[tran * result.TSIZE + i]!, load = !!isLoad(packed)
-      const req = getReq(packed), deckNumber = getDeck(packed), request = mod.requests[req]!
-      const nextPos = load ? request.startPoint : request.endPoint
-      const distanceKm = mod.roadmap.getCostN(pos, nextPos)
-      const travelCostCents = distanceKm * KM_COST_CENTS
-      elapsedMinutes += distanceKm * 60 / AVG_SPEED_KMH
-      costCents += travelCostCents
-      let reorgItems = 0, rewardAddedCents = 0
-      const deck = decks[deckNumber]
-      if (load) {
-        deck.push(req)
-        if (deck.length > 3) invalid = `deck ${deckNumber} exceeds capacity`
-      } else {
-        const index = deck.indexOf(req)
-        if (index < 0) invalid = `request ${req} is not on deck ${deckNumber}`
-        else {
-          reorgItems = deck.length - index - 1
-          costCents += reorgItems * REORG_COST_CENTS
-          deck.splice(index, 1)
-          if (elapsedMinutes <= Math.floor(request.deadline_h * 60)) {
-            rewardAddedCents = Math.round(request.value_eur * 100)
-            rewardCents += rewardAddedCents
-          }
-        }
-      }
-      steps.push({
-        index: i, req, action: load ? "load" : "unload", deck: deckNumber, from: pos, to: nextPos,
-        distanceKm, elapsedMinutes, deadlineMinutes: Math.floor(request.deadline_h * 60),
-        travelCostCents, reorgItems, reorgCostCents: reorgItems * REORG_COST_CENTS,
-        rewardAddedCents, rewardCents, costCents, scoreCents: rewardCents - costCents,
-        decks: decks.map(items => [...items]), invalid,
-      })
-      pos = nextPos
-      if (invalid) break
-    }
-    return {
-      tran, start: result.tranStart[tran], size: result.scheduleSizes[tran],
-      reportedScoreCents: result.scheduleRatings[tran], jsScoreCents: invalid ? -INF : rewardCents - costCents,
-      invalid, steps,
-    }
-  })
-  return {
-    createdAt: new Date().toISOString(), solver,
-    constants: {KM_COST_CENTS, AVG_SPEED_KMH, REORG_COST_CENTS},
-    module: {
-      NREQS: mod.NREQS, NTRANS: mod.NTRANS, MAPSIZE: mod.MAPSIZE, RSIZE: mod.RSIZE,
-      startpositions: mod.startpositions, requests: mod.requests, points: mod.roadmap.points,
-      costMatrix: Array.from(mod.roadmap.CostMatrix),
-    },
-    result: {
-      TSIZE: result.TSIZE, elapsedMs: result.elapsedMs, totalScore: result.totalScore,
-      schedule: Array.from(result.schedule), scheduleSizes: Array.from(result.scheduleSizes),
-      scheduleRatings: Array.from(result.scheduleRatings), unassigned: Array.from(result.unassigned),
-    },
-    routes,
-  }
-}
-
-async function saveReport(mod: Module, solver: SolverName, result: AnnealingResult) {
-  const response = await fetch("/report", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(makeReport(mod, solver, result)),
-  })
-  if (!response.ok) throw new Error(`Report endpoint returned ${response.status}`)
-  console.info("Annealing report saved", await response.json())
 }
 
 export async function plannerView(mod: Module): Promise<HTMLElement> {
@@ -340,14 +265,9 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
       annealer = checkedResult(mod, result);
       if (id === runId) {
         render(true);
-        void saveReport(mod, name, annealer).catch(error => console.warn("Could not save annealing report", error));
       }
     } catch (error) {
-      if (error instanceof ScoreMismatchError) {
-        if (result) try { await saveReport(mod, name, result); }
-        catch (reportError) { console.warn("Could not save mismatch report", reportError); }
-        throw error;
-      }
+      if (error instanceof ScoreMismatchError) throw error;
       if (id === runId) scoreLine.textContent = `solver failed: ${String(error)}`;
     } finally {
       if (id === runId) {

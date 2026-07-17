@@ -1,4 +1,4 @@
-import {stat, readdir, writeFile, mkdir} from "fs/promises"
+import {stat, readdir, writeFile} from "fs/promises"
 
 const argv = process.argv.slice(2)
 let devVersion = 0
@@ -58,15 +58,6 @@ Bun.serve({
   port,
   async fetch(req){
     let path = req.url.split("/").filter(x=>x.length>0).slice(2)
-    if (path[0] == "report" && req.method == "POST") {
-      const report = await req.json()
-      await mkdir("./reports", {recursive: true})
-      const stamp = new Date().toISOString().replaceAll(":", "-")
-      const solver = String((report as any).solver ?? "solver").replaceAll(/[^a-z0-9_-]/gi, "_")
-      const file = `${stamp}-${solver}-${crypto.randomUUID().slice(0, 8)}.json`
-      await writeFile(`./reports/${file}`, JSON.stringify(report, null, 2))
-      return Response.json({file}, {headers: isolationHeaders})
-    }
     if (path[0] == "version") return new Response(String(devVersion), {headers: isolationHeaders})
     if (path.length == 0) return new Response(await Bun.file("./index.html").bytes(), {headers: {...isolationHeaders, "Content-Type": "text/html"}})
     return new Response(await Bun.file("./index.js").bytes(), {headers: {...isolationHeaders, "Content-Type": "application/javascript"}})
