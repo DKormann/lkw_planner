@@ -33,8 +33,8 @@ export function createImprovedAnnealingSession(mod: Module, targetSteps = 150000
   const { NTRANS, scheduleSizes, scheduleRatings, unassigned } = state;
   bootstrapEmptyRoutes(state);
 
-  let startTemp = 120;
-  let endTemp = 0.5;
+  let startTemp = 6_000;
+  let endTemp = 25;
   let temp = startTemp;
 
   function tryAssignSampled(samples = 8) {
@@ -215,8 +215,8 @@ export function createImprovedAnnealingSession(mod: Module, targetSteps = 150000
 
   const sessionStartedAt = Date.now();
   let i = 0;
-  const tempFloor = 3;
-  const reheatTemp = 45;
+  const tempFloor = 150;
+  const reheatTemp = 2_250;
 
   function runIterations(iterationBudget: number, deadline = Infinity) {
     const endIteration = Math.min(targetSteps, i + iterationBudget);

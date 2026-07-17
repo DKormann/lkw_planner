@@ -26,7 +26,7 @@ export function baselineAnnealing(mod: Module, steps = 1_600_000): AnnealingResu
   const state = initAnnealingState(mod);
   const { NREQS, NTRANS, TSIZE, schedule, scheduleSizes, scheduleRatings, unassigned } = state;
 
-  let startTemp = 100;
+  let startTemp = 5_000;
   let temp = startTemp;
 
   bootstrapEmptyRoutes(state);

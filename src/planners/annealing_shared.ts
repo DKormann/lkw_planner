@@ -2,10 +2,10 @@ import { randInt, random } from "../random";
 import type { Module } from "../types";
 import type { AnnealingResult } from "./annealing_baseline";
 
-const KM_COST = 0.5;
-const AVG_SPEED_KMH = 60;
-const REORG_COST_EUR = 100;
-const INF = 1 << 30;
+export const KM_COST_CENTS = 50;
+export const AVG_SPEED_KMH = 60;
+export const REORG_COST_CENTS = 10_000;
+export const INF = 1 << 30;
 
 export type PairInfo = {
   req: number;
@@ -57,8 +57,8 @@ export function initAnnealingState(mod: Module, seed?: AnnealingResult): Anneali
     TSIZE,
     reqPickupLocations: new Uint16Array(requests.map((r) => r.startPoint)),
     reqDeliveryLocations: new Uint16Array(requests.map((r) => r.endPoint)),
-    reqDeadlines: new Uint32Array(requests.map((r) => r.deadline_h * AVG_SPEED_KMH)),
-    reqValues: new Uint32Array(requests.map((r) => r.value_eur / KM_COST)),
+    reqDeadlines: new Uint32Array(requests.map((r) => Math.floor(r.deadline_h * 60))),
+    reqValues: new Uint32Array(requests.map((r) => Math.round(r.value_eur * 100))),
     unassigned: seed ? new Int8Array(seed.unassigned) : new Int8Array(requests.map(() => 1)),
     tranStart: new Uint16Array(startpositions),
     schedule: seed ? new Uint32Array(seed.schedule) : new Uint32Array(TSIZE * NTRANS),
@@ -77,7 +77,8 @@ export function setReq(state: AnnealingState, tran: number, idx: number, isLoadB
 
 export function scoreRoute(state: AnnealingState, tran: number) {
   let reward = 0;
-  let duration = 0;
+  let cost = 0;
+  let elapsedMinutes = 0;
   const decks: [number[], number[]] = [[], []];
   let pos = state.tranStart[tran]!;
   const offset = routeOffset(state, tran);
@@ -87,7 +88,9 @@ export function scoreRoute(state: AnnealingState, tran: number) {
     const load = isLoad(step);
     const req = getReq(step);
     const nextPos = getPos(step);
-    duration += state.mod.roadmap.getCostN(pos, nextPos);
+    const distance = state.mod.roadmap.getCostN(pos, nextPos);
+    cost += distance * KM_COST_CENTS;
+    elapsedMinutes += distance * 60 / AVG_SPEED_KMH;
     pos = nextPos;
 
     if (load) {
@@ -98,13 +101,13 @@ export function scoreRoute(state: AnnealingState, tran: number) {
       const deck = decks[getDeck(step)]!;
       const idx = deck.indexOf(req);
       if (idx === -1) return -INF;
-      duration += (deck.length - idx - 1) * REORG_COST_EUR / KM_COST;
+      cost += (deck.length - idx - 1) * REORG_COST_CENTS;
       deck.splice(idx, 1);
-      if (duration <= state.reqDeadlines[req]!) reward += state.reqValues[req]!;
+      if (elapsedMinutes <= state.reqDeadlines[req]!) reward += state.reqValues[req]!;
     }
   }
 
-  return reward - duration;
+  return reward - cost;
 }
 
 export function refreshAllRatings(state: AnnealingState) {
@@ -113,7 +116,7 @@ export function refreshAllRatings(state: AnnealingState) {
   }
 }
 
-export function bootstrapEmptyRoutes(state: AnnealingState, maxLoss = 240) {
+export function bootstrapEmptyRoutes(state: AnnealingState, maxLoss = 12_000) {
   for (let tran = 0; tran < state.NTRANS; tran++) {
     if (state.scheduleSizes[tran] !== 0) continue;
 

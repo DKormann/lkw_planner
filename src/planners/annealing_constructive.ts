@@ -18,8 +18,8 @@ export function constructiveAnnealing(mod: Module, steps = 150000) {
   const state = initAnnealingState(mod, warmup);
   const startedAt = Date.now();
 
-  let temp0 = 90;
-  let temp1 = 0.3;
+  let temp0 = 4_500;
+  let temp1 = 15;
   let temp = temp0;
 
   function tryGreedyAssign(samples = 12) {

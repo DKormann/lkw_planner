@@ -4,7 +4,7 @@ import { hightLights } from "../view/main";
 import { baselineAnnealing, type AnnealingResult } from "./annealing_baseline";
 import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnnealingSession } from "./annealing_improved";
 import { annealingWasm } from "./annealing_wasm";
-import { getDeck, getReq, isLoad } from "./annealing_shared";
+import { AVG_SPEED_KMH, getDeck, getReq, INF, initAnnealingState, isLoad, KM_COST_CENTS, REORG_COST_CENTS, scoreRoute } from "./annealing_shared";
 
 export const availableSolvers = {
   baseline: baselineAnnealing,
@@ -14,9 +14,127 @@ export const availableSolvers = {
 type SolverName = keyof typeof availableSolvers;
 
 const INITIAL_SOLVER: SolverName = "wasm";
-const KM_COST = 0.5;
-const AVG_SPEED_KMH = 60;
-const REORG_COST_EUR = 100;
+const euros = (cents: number) => `${(cents / 100).toFixed(2)}€`;
+
+class ScoreMismatchError extends Error {}
+
+function canonicalSchedule(mod: Module, result: AnnealingResult) {
+  const schedule = new Uint32Array(result.schedule)
+  for (let tran = 0; tran < mod.NTRANS; tran++) {
+    const size = result.scheduleSizes[tran]!
+    if (size < 0 || size > result.TSIZE) throw new ScoreMismatchError(`Transporter ${tran} has invalid schedule size ${size}`)
+    for (let i = 0; i < size; i++) {
+      const at = tran * result.TSIZE + i
+      const step = schedule[at]
+      if (step === undefined) throw new ScoreMismatchError(`Transporter ${tran} schedule is truncated at ${i}`)
+      const req = getReq(step), request = mod.requests[req]
+      if (!request) throw new ScoreMismatchError(`Transporter ${tran} references unknown request ${req}`)
+      const pos = isLoad(step) ? request.startPoint : request.endPoint
+      schedule[at] = (step & 0xffff) | pos << 16
+    }
+  }
+  return schedule
+}
+
+function checkedResult(mod: Module, result: AnnealingResult) {
+  if (result.scheduleSizes.length !== mod.NTRANS || result.scheduleRatings.length !== mod.NTRANS)
+    throw new ScoreMismatchError("Solver returned incorrectly sized transporter arrays")
+  const schedule = canonicalSchedule(mod, result)
+  const state = initAnnealingState(mod)
+  Object.assign(state, {
+    TSIZE: result.TSIZE,
+    schedule,
+    scheduleSizes: result.scheduleSizes,
+    scheduleRatings: result.scheduleRatings,
+    tranStart: result.tranStart,
+    unassigned: result.unassigned,
+  })
+  let total = 0
+  for (let tran = 0; tran < mod.NTRANS; tran++) {
+    const expected = scoreRoute(state, tran), reported = result.scheduleRatings[tran]!
+    if (reported !== expected)
+      throw new ScoreMismatchError(`Transporter ${tran} score mismatch: reported ${reported}, JS ${expected}`)
+    total += expected
+  }
+  if (result.totalScore !== total)
+    throw new ScoreMismatchError(`Total score mismatch: reported ${result.totalScore}, JS ${total}`)
+  return result
+}
+
+function makeReport(mod: Module, solver: SolverName, result: AnnealingResult) {
+  const schedule = canonicalSchedule(mod, result)
+  const routes = Array.from({length: mod.NTRANS}, (_, tran) => {
+    const decks: [number[], number[]] = [[], []]
+    const steps = []
+    let pos = result.tranStart[tran]!, elapsedMinutes = 0, rewardCents = 0, costCents = 0
+    let invalid: string | null = null
+    for (let i = 0; i < result.scheduleSizes[tran]!; i++) {
+      const packed = schedule[tran * result.TSIZE + i]!, load = !!isLoad(packed)
+      const req = getReq(packed), deckNumber = getDeck(packed), request = mod.requests[req]!
+      const nextPos = load ? request.startPoint : request.endPoint
+      const distanceKm = mod.roadmap.getCostN(pos, nextPos)
+      const travelCostCents = distanceKm * KM_COST_CENTS
+      elapsedMinutes += distanceKm * 60 / AVG_SPEED_KMH
+      costCents += travelCostCents
+      let reorgItems = 0, rewardAddedCents = 0
+      const deck = decks[deckNumber]
+      if (load) {
+        deck.push(req)
+        if (deck.length > 3) invalid = `deck ${deckNumber} exceeds capacity`
+      } else {
+        const index = deck.indexOf(req)
+        if (index < 0) invalid = `request ${req} is not on deck ${deckNumber}`
+        else {
+          reorgItems = deck.length - index - 1
+          costCents += reorgItems * REORG_COST_CENTS
+          deck.splice(index, 1)
+          if (elapsedMinutes <= Math.floor(request.deadline_h * 60)) {
+            rewardAddedCents = Math.round(request.value_eur * 100)
+            rewardCents += rewardAddedCents
+          }
+        }
+      }
+      steps.push({
+        index: i, req, action: load ? "load" : "unload", deck: deckNumber, from: pos, to: nextPos,
+        distanceKm, elapsedMinutes, deadlineMinutes: Math.floor(request.deadline_h * 60),
+        travelCostCents, reorgItems, reorgCostCents: reorgItems * REORG_COST_CENTS,
+        rewardAddedCents, rewardCents, costCents, scoreCents: rewardCents - costCents,
+        decks: decks.map(items => [...items]), invalid,
+      })
+      pos = nextPos
+      if (invalid) break
+    }
+    return {
+      tran, start: result.tranStart[tran], size: result.scheduleSizes[tran],
+      reportedScoreCents: result.scheduleRatings[tran], jsScoreCents: invalid ? -INF : rewardCents - costCents,
+      invalid, steps,
+    }
+  })
+  return {
+    createdAt: new Date().toISOString(), solver,
+    constants: {KM_COST_CENTS, AVG_SPEED_KMH, REORG_COST_CENTS},
+    module: {
+      NREQS: mod.NREQS, NTRANS: mod.NTRANS, MAPSIZE: mod.MAPSIZE, RSIZE: mod.RSIZE,
+      startpositions: mod.startpositions, requests: mod.requests, points: mod.roadmap.points,
+      costMatrix: Array.from(mod.roadmap.CostMatrix),
+    },
+    result: {
+      TSIZE: result.TSIZE, elapsedMs: result.elapsedMs, totalScore: result.totalScore,
+      schedule: Array.from(result.schedule), scheduleSizes: Array.from(result.scheduleSizes),
+      scheduleRatings: Array.from(result.scheduleRatings), unassigned: Array.from(result.unassigned),
+    },
+    routes,
+  }
+}
+
+async function saveReport(mod: Module, solver: SolverName, result: AnnealingResult) {
+  const response = await fetch("/report", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(makeReport(mod, solver, result)),
+  })
+  if (!response.ok) throw new Error(`Report endpoint returned ${response.status}`)
+  console.info("Annealing report saved", await response.json())
+}
 
 export async function plannerView(mod: Module): Promise<HTMLElement> {
   const outerBorder = "1px solid " + color.gray;
@@ -120,7 +238,7 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
               popup(
                 p("transporter: ", tran),
                 p("start: ", start),
-                p("score: ", annealer?.scheduleRatings[tran]!),
+                p("score: ", euros(annealer?.scheduleRatings[tran] ?? 0)),
                 p("steps: ", annealer?.scheduleSizes[tran]!),
               );
             },
@@ -133,7 +251,7 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
               },
             },
           ),
-          td(annealer?.scheduleRatings[tran]!, style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" })),
+          td(euros(annealer?.scheduleRatings[tran] ?? 0), style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" })),
           td(
             table(
               style({
@@ -174,7 +292,7 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
 
   function renderStatus() {
     if (!annealer) return;
-    scoreLine.textContent = `score: ${annealer?.totalScore ?? 0}`;
+    scoreLine.textContent = `score: ${euros(annealer.totalScore)}`;
     timeLine.textContent = `search time: ${(annealer!.elapsedMs/1000).toFixed(2)} s`;
 
     detailWrap.replaceChildren(
@@ -186,12 +304,12 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
           }),
           tr(cell("unassigned requests"), cell(Array.from(annealer!.unassigned).map((x, i) => ({ x, i })).filter((x) => x.x).flatMap((x) => [span(" "), itemButton(x.i)]))),
           tr(cell("search time"), cell(`${annealer?.elapsedMs ?? 0}ms`)),
-          tr(cell("score"), cell(annealer?.totalScore ?? 0)),
+          tr(cell("score"), cell(euros(annealer.totalScore))),
           tr(cell("transporter count"), cell(mod.NTRANS)),
           tr(cell("request count"), cell(mod.NREQS)),
-          tr(cell("cost per km"), cell(`${KM_COST}€`)),
+          tr(cell("cost per km"), cell(euros(KM_COST_CENTS))),
           tr(cell("average speed"), cell(`${AVG_SPEED_KMH}km/h`)),
-          tr(cell("reorganization cost"), cell(`${REORG_COST_EUR}€`)),
+          tr(cell("reorganization cost"), cell(euros(REORG_COST_CENTS))),
         ),
       ),
     );
@@ -211,15 +329,25 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     runButton.disabled = true;
     scoreLine.textContent = "running…";
     tableWrap.replaceChildren();
+    let result: AnnealingResult | null = null;
     try {
       if (name === "improved") {
         annealingSession = createImprovedAnnealingSession(mod, 1_900_000);
-        annealer = annealingSession.iterateForMs(10);
+        result = annealingSession.iterateForMs(10);
       } else {
-        annealer = await availableSolvers[name](mod);
+        result = await availableSolvers[name](mod);
       }
-      if (id === runId) render(true);
+      annealer = checkedResult(mod, result);
+      if (id === runId) {
+        render(true);
+        void saveReport(mod, name, annealer).catch(error => console.warn("Could not save annealing report", error));
+      }
     } catch (error) {
+      if (error instanceof ScoreMismatchError) {
+        if (result) try { await saveReport(mod, name, result); }
+        catch (reportError) { console.warn("Could not save mismatch report", reportError); }
+        throw error;
+      }
       if (id === runId) scoreLine.textContent = `solver failed: ${String(error)}`;
     } finally {
       if (id === runId) {
@@ -243,14 +371,14 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     runButton.textContent = "stop";
     annealingTimer = window.setInterval(() => {
       if (!annealingSession) return;
-      annealer = annealingSession.iterateForMs(120);
+      annealer = checkedResult(mod, annealingSession.iterateForMs(120));
       render();
     }, 150);
   };
 
   heatButton.onclick = () => {
     if (!annealingSession) return;
-    annealer = annealingSession.reheat();
+    annealer = checkedResult(mod, annealingSession.reheat());
     render(true);
   };
 

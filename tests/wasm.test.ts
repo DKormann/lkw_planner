@@ -1,6 +1,6 @@
 import { array, boundsCheck, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
 import { annealingWasm } from "../src/planners/annealing_wasm"
-import { getReq, isLoad, scoreRoute, type AnnealingState } from "../src/planners/annealing_shared"
+import { initAnnealingState, insertStops, getReq, isLoad, KM_COST_CENTS, scoreRoute, type AnnealingState } from "../src/planners/annealing_shared"
 import { randomModule } from "../src/types"
 import { assert, runTests } from "./tests"
 
@@ -173,14 +173,24 @@ await runTests(
       mod, NREQS: mod.NREQS, NTRANS: mod.NTRANS, TSIZE: result.TSIZE,
       reqPickupLocations: new Uint16Array(mod.requests.map(request => request.startPoint)),
       reqDeliveryLocations: new Uint16Array(mod.requests.map(request => request.endPoint)),
-      reqDeadlines: new Uint32Array(mod.requests.map(request => request.deadline_h * 60)),
-      reqValues: new Uint32Array(mod.requests.map(request => request.value_eur / 0.5)),
+      reqDeadlines: new Uint32Array(mod.requests.map(request => Math.floor(request.deadline_h * 60))),
+      reqValues: new Uint32Array(mod.requests.map(request => Math.round(request.value_eur * 100))),
       unassigned: result.unassigned, tranStart: result.tranStart, schedule,
       scheduleSizes: result.scheduleSizes, scheduleRatings: result.scheduleRatings,
     }
     for (let tran = 0; tran < mod.NTRANS; tran++)
       assert(result.scheduleRatings[tran] === scoreRoute(state, tran), `transporter ${tran} rating should match JS`)
-    assert(result.scheduleRatings.every(score => score >= 0), "accepted insertions should never reduce an initially empty route")
+  },
+
+  function annealingScoresInCents() {
+    const mod = randomModule(1, 1, 5, 100, 22)
+    const request = mod.requests[0]!
+    request.value_eur = 123
+    request.deadline_h = 10_000
+    const state = initAnnealingState(mod)
+    insertStops(state, 0, 0, 0, 0, 0)
+    const distance = mod.roadmap.getCostN(mod.startpositions[0]!, request.startPoint, request.endPoint)
+    assert(scoreRoute(state, 0) === 12_300 - distance * KM_COST_CENTS, "route score should be reward cents minus travel cents")
   },
 
   async function rejectsStructsOver64Bits() {

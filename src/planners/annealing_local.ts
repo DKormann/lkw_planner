@@ -17,8 +17,8 @@ export function localAnnealing(mod: Module, steps = 150000) {
   const state = initAnnealingState(mod, warmup);
   const startedAt = Date.now();
 
-  let temp0 = 60;
-  let temp1 = 0.2;
+  let temp0 = 3_000;
+  let temp1 = 10;
   let temp = temp0;
 
   function tryReinsertTight(samples = 12) {
