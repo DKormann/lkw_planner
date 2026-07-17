@@ -1,8 +1,8 @@
 import {
   type AnyArray, type AnyExpr, type AnyFunc, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
   type ModuleDef, type NumType, type RemainderOp, type Stmt, type StorageType, asStmts,
-} from "./wasm_ast"
-import { type ArrayLayout, type ModuleAnalysis } from "./wasm_analyze"
+} from "./ast"
+import { type ArrayLayout, type ModuleAnalysis } from "./analyze"
 
 const magic = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
 const resultType = (result: AnyFunc["result"]) =>

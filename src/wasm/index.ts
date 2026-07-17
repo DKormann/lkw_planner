@@ -1,11 +1,11 @@
-export * from "./wasm_ast"
-export { formatModule } from "./wasm_format"
+export * from "./ast"
+export { formatModule } from "./format"
 
-import { analyzeModule } from "./wasm_analyze"
-import { emitModule } from "./wasm_codegen"
+import { analyzeModule } from "./analyze"
+import { emitModule } from "./codegen"
 import type {
   AnyArray, AnyFunc, CompileResult, JSStruct, ModuleDef, StructFields, StructType,
-} from "./wasm_ast"
+} from "./ast"
 
 const arrayCtors = {
   i8: Int8Array, u8: Uint8Array, i16: Int16Array, u16: Uint16Array,

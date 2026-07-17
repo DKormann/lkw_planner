@@ -2,7 +2,7 @@ import {
   allocateLocal, asStmts,
   type AnyArray, type AnyFunc, type ArrayDefs, type Expr,
   type FuncBody, type FuncDefs, type ModuleDef, type NumType, type ResultType,
-} from "./wasm_ast"
+} from "./ast"
 
 const die = (x: unknown): never => { throw new Error(`Unexpected value: ${String(x)}`) }
 export type ArrayLayout = { length: number, offset: number, elementSize: number }

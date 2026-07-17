@@ -1,5 +1,5 @@
-import { analyzeModule, type BuiltFunc } from "./wasm_analyze"
-import { asStmts, type AnyArray, type AnyExpr, type AnyFunc, type ModuleDef, type Stmt } from "./wasm_ast"
+import { analyzeModule, type BuiltFunc } from "./analyze"
+import { asStmts, type AnyArray, type AnyExpr, type AnyFunc, type ModuleDef, type Stmt } from "./ast"
 
 const binary: Record<string, string> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%", umod: "%u",

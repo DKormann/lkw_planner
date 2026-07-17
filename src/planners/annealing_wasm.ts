@@ -1,9 +1,48 @@
 import type { Module } from "../types"
-import { array, compile, func, i32, ifElse, lit, local, log, ret, struct, trap, umod, type AnyArray, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
+import { array, compile, func, i32, ifElse, lit, local, log, ret, struct, trap, umod, type AnyArray, type ArrayHandle, type Expr, type ExprLike, type Stmt, type StmtBody, type StorageType, type StructArrayHandle, type StructFields, type StructType } from "../wasm"
 import type { AnnealingResult } from "./annealing_baseline"
 
 const NWORKERS = 4
 const RANDSTRIDE = 16
+
+
+
+let DEBUG = true
+
+function debug (tag: string, value: ExprLike<"i32">){
+  if (!DEBUG) return []
+  return [
+    log(tag, value)
+  ]
+}
+
+
+
+const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
+  const i = lit("i32", index), n = lit("i32", count)
+  return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
+}
+
+
+function checkedArray<T extends StorageType>(type: T, length: number): ArrayHandle<T>
+function checkedArray<F extends StructFields>(type: StructType<F>, length: number): StructArrayHandle<F>
+function checkedArray(type: StorageType | StructType<any>, length: number) {
+  const arr = array(type as StorageType, length) as AnyArray
+  const at = arr.at, move = arr.move
+  const checkedIndex = func(["i32", "i32"], "i32", (index, count) => [
+    boundsCheck(arr, index, count),
+    ret(index),
+  ])
+  arr.at = index => at(checkedIndex.call(index, 1))
+  arr.move = (target, source, count) => move(
+    checkedIndex.call(target, count),
+    checkedIndex.call(source, count),
+    count,
+  )
+  return arr
+}
+
+
 
 export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   const TSIZE = Math.floor(planner.NREQS / planner.NTRANS * 2.5 * 2 + 10)
@@ -19,13 +58,13 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     deadline: "u16",
   })
 
-  const randState = array("i32", NWORKERS * RANDSTRIDE)
-  const dists = array("i32", planner.RSIZE)
-  const requests = array(REQ, planner.NREQS)
-  const assigned = array("u8", planner.NREQS)
-  const schedule = array(STOP, planner.NTRANS * TSIZE)
-  const sched_size = array("i16", planner.NTRANS)
-  const tran_positions = array("i16", planner.NTRANS)
+  const randState      = checkedArray("i32", NWORKERS * RANDSTRIDE)
+  const dists          = checkedArray("i32", planner.RSIZE)
+  const requests       = checkedArray(REQ, planner.NREQS)
+  const assigned       = checkedArray("u8", planner.NREQS)
+  const schedule       = checkedArray(STOP, planner.NTRANS * TSIZE)
+  const sched_size     = checkedArray("i16", planner.NTRANS)
+  const tran_positions = checkedArray("i16", planner.NTRANS)
 
   const randNext = func(["i32"], "i32", gid => {
     const value = local("i32")
@@ -40,20 +79,6 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   })
   const randint = func(["i32", "i32"], "i32", (gid, max) => umod(randNext.call(gid), max))
 
-  let DEBUG = true
-
-  function debug (tag: string, value: ExprLike<"i32">){
-    if (!DEBUG) return []
-    return [
-      log(tag, value)
-    ]
-  }
-
-
-  const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
-    const i = lit("i32", index), n = lit("i32", count)
-    return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
-  }
 
 
   const tryAssign = func([], "void", () => {
