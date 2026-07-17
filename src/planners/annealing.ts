@@ -79,7 +79,6 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
   for (const name of Object.keys(availableSolvers) as SolverName[]) solverSelect.add(new Option(name, name));
   solverSelect.value = INITIAL_SOLVER;
   const solverLine = p("solver: ", solverSelect);
-  const unassignedLine = p();
   const detailWrap = div();
   const tableWrap = div(
     style({
@@ -177,13 +176,6 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     if (!annealer) return;
     scoreLine.textContent = `score: ${annealer?.totalScore ?? 0}`;
     timeLine.textContent = `search time: ${(annealer!.elapsedMs/1000).toFixed(2)} s`;
-    unassignedLine.replaceChildren(
-      "unassigned: ",
-      ...Array.from(annealer!.unassigned)
-        .map((x, i) => ({ x, i }))
-        .filter((x) => x.x)
-        .flatMap((x) => [span(" "), itemButton(x.i)]),
-    );
 
     detailWrap.replaceChildren(
       div(
@@ -281,6 +273,5 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     timeLine,
     tableWrap,
     detailWrap,
-    unassignedLine,
   );
 }

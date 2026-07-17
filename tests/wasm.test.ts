@@ -1,4 +1,7 @@
 import { array, boundsCheck, compile, formatModule, func, i32, ifElse, local, log, ret, struct, trap } from "../src/wasm"
+import { annealingWasm } from "../src/planners/annealing_wasm"
+import { getReq, isLoad, scoreRoute, type AnnealingState } from "../src/planners/annealing_shared"
+import { randomModule } from "../src/types"
 import { assert, runTests } from "./tests"
 
 await runTests(
@@ -151,6 +154,33 @@ await runTests(
     let trapped = false
     try { run(2) } catch { trapped = true }
     assert(trapped, "dynamic out-of-bounds struct access should trap")
+  },
+
+  async function wasmTransporterRatingMatchesJs() {
+    const mod = randomModule(20, 5, 20, 100, 22)
+    const originalLog = console.log
+    console.log = () => {}
+    let result
+    try { result = await annealingWasm(mod) } finally { console.log = originalLog }
+    const schedule = new Uint32Array(result.schedule)
+    for (let tran = 0; tran < mod.NTRANS; tran++) {
+      for (let i = 0; i < result.scheduleSizes[tran]!; i++) {
+        const at = tran * result.TSIZE + i, step = schedule[at]!, request = mod.requests[getReq(step)]!
+        schedule[at] = step | (isLoad(step) ? request.startPoint : request.endPoint) << 16
+      }
+    }
+    const state: AnnealingState = {
+      mod, NREQS: mod.NREQS, NTRANS: mod.NTRANS, TSIZE: result.TSIZE,
+      reqPickupLocations: new Uint16Array(mod.requests.map(request => request.startPoint)),
+      reqDeliveryLocations: new Uint16Array(mod.requests.map(request => request.endPoint)),
+      reqDeadlines: new Uint32Array(mod.requests.map(request => request.deadline_h * 60)),
+      reqValues: new Uint32Array(mod.requests.map(request => request.value_eur / 0.5)),
+      unassigned: result.unassigned, tranStart: result.tranStart, schedule,
+      scheduleSizes: result.scheduleSizes, scheduleRatings: result.scheduleRatings,
+    }
+    for (let tran = 0; tran < mod.NTRANS; tran++)
+      assert(result.scheduleRatings[tran] === scoreRoute(state, tran), `transporter ${tran} rating should match JS`)
+    assert(result.scheduleRatings.every(score => score >= 0), "accepted insertions should never reduce an initially empty route")
   },
 
   async function rejectsStructsOver64Bits() {
