@@ -8,6 +8,7 @@ import { setRandSeed } from "../random";
 import { number } from "../schema";
 import { plannerView } from "../planners/annealing";
 import { setUpWasm, wasmView } from "./wasmview";
+import { realModule, realRoadMapFromCache, type RealRoadMapCache } from "../real_roadmap";
 
 
 export let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
@@ -35,7 +36,21 @@ body.replaceChildren(page)
 
 setRandSeed(24)
 
-export let module = randomModule()
+async function initialModule() {
+  try {
+    const response = await fetch("./real-roadmap.json")
+    if (!response.ok) throw new Error(await response.text())
+    const cache = await response.json() as RealRoadMapCache
+    const roadmap = realRoadMapFromCache(cache)
+    console.info(`Using cached real roadmap with ${roadmap.points.length} car dealers`)
+    return realModule(roadmap, REQUEST_COUNT.get(), LKW_COUNT.get(), 24)
+  } catch (error) {
+    console.info("Using synthetic roadmap; build the real-roadmap cache to enable Germany data", error)
+    return randomModule(REQUEST_COUNT.get(), LKW_COUNT.get())
+  }
+}
+
+export let module = await initialModule()
 
 export type HighLight = {
   points: {

@@ -1,9 +1,9 @@
 
 import type { Module, UUID } from "../types";
 // import { findPath } from "../planner";
-import {  type RoadMap } from "../roadmap";
 import { div, p, style } from "./html";
 import { hightLights } from "./main";
+import germanyOutline from "./germany_outline.json";
 
 
 function mkSvg (tag: "circle", x: number, y: number) : {el: SVGCircleElement, setColor: (color: string)=>void}
@@ -57,6 +57,21 @@ function mkSvg (tag: "circle" | "line" | "text", x1: number, y1: number, x2?: nu
 export function mapView ( mod: Module ) : HTMLElement {
 
   let {roadmap, MAPSIZE} = mod
+  const realMap = "DurationMatrix" in roadmap
+  const xs = roadmap.points.map(point => point.x)
+  const ys = roadmap.points.map(point => point.y)
+  const minX = realMap ? 5.5 : 0
+  const maxX = realMap ? 15.5 : MAPSIZE
+  const minY = realMap ? 47.2 : 0
+  const maxY = realMap ? 55.1 : MAPSIZE
+  // At Germany's latitude, one degree of longitude is only about 63% of one degree
+  // of latitude. Keep that geographic aspect ratio instead of stretching both axes.
+  const projectX = (x: number) => realMap
+    ? .135 + .73 * (x - minX) / Math.max(maxX - minX, 1e-9)
+    : x / MAPSIZE
+  const projectY = (y: number) => realMap
+    ? .96 - .92 * (y - minY) / Math.max(maxY - minY, 1e-9)
+    : y / MAPSIZE
 
 
 
@@ -68,8 +83,26 @@ export function mapView ( mod: Module ) : HTMLElement {
 
   let elements = new Map<any, SVGElement>()
   let sources = new Map<SVGElement, any>()
+
+  if (realMap) {
+    const outline = document.createElementNS("http://www.w3.org/2000/svg", "path")
+    outline.setAttribute("d", germanyOutline.map(polygon =>
+      polygon.map(ring => ring.map(([lon, lat], index) =>
+        `${index === 0 ? "M" : "L"}${projectX(lon!)} ${projectY(lat!)}`
+      ).join(" ") + " Z").join(" ")
+    ).join(" "))
+    outline.setAttribute("fill", "#f1f4f0")
+    outline.setAttribute("fill-rule", "evenodd")
+    outline.setAttribute("stroke", "#829087")
+    outline.setAttribute("stroke-width", "0.003")
+    outline.setAttribute("vector-effect", "non-scaling-stroke")
+    outline.style.pointerEvents = "none"
+    element.appendChild(outline)
+  }
   
-  for (let x =0 ; x < roadmap.points.length; x++){
+  // A real roadmap's matrix is complete, so drawing every matrix pair would create
+  // tens of thousands of lines. Synthetic maps still show their generated roads.
+  for (let x =0 ; !realMap && x < roadmap.points.length; x++){
     for (let y = 0; y< roadmap.points.length; y++){
       if (x == y) continue
       let len = roadmap.getroad(x,y)
@@ -78,7 +111,7 @@ export function mapView ( mod: Module ) : HTMLElement {
 
       let a = roadmap.points[x]!
       let b = roadmap.points[y]!
-      let line = mkSvg("line", a.x/MAPSIZE, a.y/MAPSIZE, b.x/MAPSIZE, b.y/MAPSIZE).el
+      let line = mkSvg("line", projectX(a.x), projectY(a.y), projectX(b.x), projectY(b.y)).el
       let id = "road"+roadmap.roadIDX(x,y)
       elements.set(id, line)
       sources.set(line, id)
@@ -88,32 +121,69 @@ export function mapView ( mod: Module ) : HTMLElement {
   
   for (let x =0; x<roadmap.points.length; x++){
     let loc = roadmap.points[x]!
-    let circle = mkSvg("circle", loc.x/MAPSIZE, loc.y/MAPSIZE).el
+    let circle = mkSvg("circle", projectX(loc.x), projectY(loc.y)).el
+    if (realMap) circle.setAttribute("r", "0.004")
     elements.set(x, circle)
     sources.set(circle, x)
     element.appendChild(circle)
   }
 
   let hints: {remove:()=>void}[] = []
+  let highlightVersion = 0
+  const geometryCache = new Map<string, Promise<number[][] | null>>()
+
+  function routeGeometry(from: number, to: number) {
+    const a = Math.min(from, to), b = Math.max(from, to)
+    const key = `${a}-${b}`
+    let geometry = geometryCache.get(key)
+    if (!geometry) {
+      geometry = fetch(`./route-geometry?from=${a}&to=${b}`)
+        .then(async response => response.ok ? (await response.json() as {coordinates: number[][]}).coordinates : null)
+        .catch(() => null)
+      geometryCache.set(key, geometry)
+    }
+    return geometry.then(coordinates => coordinates && from > to ? [...coordinates].reverse() : coordinates)
+  }
+
+  function routePath(coordinates: number[][], color: string) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path")
+    path.setAttribute("d", coordinates.map(([lon, lat], index) =>
+      `${index === 0 ? "M" : "L"}${projectX(lon!)} ${projectY(lat!)}`
+    ).join(" "))
+    path.setAttribute("fill", "none")
+    path.setAttribute("stroke", color)
+    path.setAttribute("stroke-width", ".006")
+    path.setAttribute("stroke-linecap", "round")
+    path.setAttribute("stroke-linejoin", "round")
+    element.appendChild(path)
+    return { remove: () => path.remove() }
+  }
 
   hightLights.onupdate((nH,o)=>{
+    const version = ++highlightVersion
     hints.forEach(el=>el.remove())
+    hints = []
     for (let n of nH){
       let last : number | null = null
       for (let p of n.points){
         let next = p.number
         if (last !== null){
-          // let path = roadmap.findPath(last, next)
-          // for (let i = 0; i < path.length - 1; i++){
-          //   let A = roadmap.points[path[i]!]!
-          //   let B = roadmap.points[path[i+1]!]!
-          //   let line = mkSvg("line", A.x/MAPSIZE, A.y/MAPSIZE, B.x/MAPSIZE, B.y/MAPSIZE)
-          //   line.setColor(n.color ?? "#ffc988")
-          //   line.el.setAttribute("stroke-width", "0.01")
-          //   line.el.setAttribute("z-index", "100")
-          //   element.appendChild(line.el)
-          //   hints.push({remove: ()=>line.el.remove()})
-          // }
+          let A = roadmap.points[last]!
+          let B = roadmap.points[next]!
+          let line = mkSvg("line", projectX(A.x), projectY(A.y), projectX(B.x), projectY(B.y))
+          line.setColor(n.color ?? "#ffc988")
+          line.el.setAttribute("stroke-width", "0.01")
+          element.appendChild(line.el)
+          const fallback = {remove: ()=>line.el.remove()}
+          hints.push(fallback)
+          if (realMap && last !== next) {
+            void routeGeometry(last, next).then(coordinates => {
+              if (version !== highlightVersion || !coordinates) return
+              fallback.remove()
+              hints = hints.filter(hint => hint !== fallback)
+              hints.push(routePath(coordinates, n.color ?? "#ffc988"))
+            })
+          }
         }
         last = next
       }
@@ -121,7 +191,8 @@ export function mapView ( mod: Module ) : HTMLElement {
       for (let p of n.points){
         if (p.logo) {
           let pos = roadmap.points[p.number]!
-          let el = mkSvg("text", pos.x/ MAPSIZE, pos.y/MAPSIZE, p.logo)
+          let el = mkSvg("text", projectX(pos.x), projectY(pos.y), p.logo)
+          if (realMap) el.el.setAttribute("font-size", ".035")
           el.el.setAttribute("z-index", "1000")
           element.appendChild(el.el)
           hints.push(el.el)
@@ -136,5 +207,3 @@ export function mapView ( mod: Module ) : HTMLElement {
 
   return dv
 }
-
-
