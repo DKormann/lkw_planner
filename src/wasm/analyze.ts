@@ -1,7 +1,7 @@
 import {
-  allocateLocal, asStmts,
+  allocateLocal,
   type AnyArray, type AnyFunc, type AnyGlobal, type ArrayDefs, type Expr,
-  type FuncBody, type FuncDefs, type ModuleDef, type NumType, type ResultType,
+  type FuncDefs, type ModuleDef, type NumType,
 } from "./ast"
 
 const die = (x: unknown): never => { throw new Error(`Unexpected value: ${String(x)}`) }
@@ -32,7 +32,7 @@ const walk = (node: any, fns: Visitors): void => {
   if (Array.isArray(node)) return node.forEach(x => walk(x, fns))
   const children = (...values: any[]) => values.forEach(x => walk(x, fns))
   switch (node.kind) {
-    case "const": case "break": case "continue": return
+    case "const": return
     case "local.get": fns.local?.(node.local, node.type); return
     case "local.set": fns.local?.(node.local, node.type); return walk(node.value, fns)
     case "global.get": fns.global?.(node); return
@@ -44,11 +44,10 @@ const walk = (node: any, fns: Visitors): void => {
     case "load": fns.array?.(node.array); return walk(node.index, fns)
     case "array.store": fns.array?.(node.array); return children(node.index, node.value)
     case "array.move": fns.array?.(node.array); return children(node.target, node.source, node.count)
-    case "block": return walk(node.body, fns)
     case "loop": return children(node.cond, node.body)
+    case "for": fns.local?.(node.local, "i32"); return children(node.start, node.end, node.body)
     case "trap": fns.trap?.(node.message); return
     case "log": fns.log?.(node.message); return walk(node.value, fns)
-    case "expr": return walk(node.expr, fns)
     default: die(node)
   }
 }
@@ -68,7 +67,7 @@ const arrayLayouts = (arrays: AnyArray[]) => {
 
 export type BuiltFunc = {
   func: AnyFunc
-  built: FuncBody<ResultType>
+  built: import("./ast").Stmt[]
   locals: [number, NumType][]
   localIndexes: Record<number, number>
   functions: AnyFunc[]
@@ -82,7 +81,7 @@ const buildFunc = (func: AnyFunc): BuiltFunc => {
   const params = func.params.map(type => allocateLocal(type)) as Expr<NumType>[]
   const paramIds = params.map(p => p.kind === "local.get" ? p.local : -1)
   const result = func.build(...params)
-  const built = typeof func.result === "object" && !asStmts(result) ? result.packed : result
+  const built = result
   const found = new Map<number, NumType>()
   const functions = new Set<AnyFunc>(), arrays = new Set<AnyArray>(), globals = new Set<AnyGlobal>(), traps = new Set<string>(), logs = new Set<string>()
   walk(built, {

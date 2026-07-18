@@ -1,6 +1,6 @@
 import {
   type AnyArray, type AnyExpr, type AnyFunc, type AnyGlobal, type ArithmeticOp, type BitOp, type CmpOp, type Expr,
-  type MemoryType, type ModuleDef, type NumType, type RemainderOp, type Stmt, asStmts,
+  type MemoryType, type ModuleDef, type NumType, type RemainderOp, type Stmt,
 } from "./ast"
 import { type ArrayLayout, type ModuleAnalysis } from "./analyze"
 
@@ -144,14 +144,7 @@ const compileExpr = (e: AnyExpr): number[] => {
   }
 }
 
-type LabelFrame = { control?: number, kind?: "break" | "continue" }
-const depth = (stack: LabelFrame[], control: number, kind: NonNullable<LabelFrame["kind"]>) => {
-  const i = stack.findIndex(x => x.control === control && x.kind === kind)
-  if (i < 0) throw new Error(`Unknown ${kind} target ${control}`)
-  return i
-}
-
-const compileStmt = (s: Stmt, stack: LabelFrame[] = []): number[] => {
+const compileStmt = (s: Stmt): number[] => {
   switch (s.kind) {
     case "local.set":
       return [...compileExpr(s.value), 0x21, ...u32(lix[s.local]!)]
@@ -175,17 +168,22 @@ const compileStmt = (s: Stmt, stack: LabelFrame[] = []): number[] => {
       ]
     }
     case "if":
-      return [...compileExpr(s.cond), 0x04, 0x40, ...flatMap(s.then, x => compileStmt(x, [{}, ...stack])), ...(s.else.length ? [0x05, ...flatMap(s.else, x => compileStmt(x, [{}, ...stack]))] : []), 0x0b]
-    case "block":
-      return [0x02, 0x40, ...flatMap(s.body, x => compileStmt(x, [{ control: s.control, kind: "break" }, ...stack])), 0x0b]
+      return [...compileExpr(s.cond), 0x04, 0x40, ...flatMap(s.then, compileStmt), ...(s.else.length ? [0x05, ...flatMap(s.else, compileStmt)] : []), 0x0b]
     case "loop":
-      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, x => compileStmt(x, [{ control: s.control, kind: "continue" }, { control: s.control, kind: "break" }, ...stack])), 0x0c, ...u32(0), 0x0b, 0x0b]
-    case "break":
-      if (s.target == null) throw new Error("breakTo() used outside a block or loop")
-      return [0x0c, ...u32(depth(stack, s.target, "break"))]
-    case "continue":
-      if (s.target == null) throw new Error("continueTo() used outside a loop")
-      return [0x0c, ...u32(depth(stack, s.target, "continue"))]
+      return [0x02, 0x40, 0x03, 0x40, ...compileExpr(s.cond), 0x45, 0x0d, ...u32(1), ...flatMap(s.body, compileStmt), 0x0c, ...u32(0), 0x0b, 0x0b]
+    case "for": {
+      const index = lix[s.local]!
+      return [
+        ...compileExpr(s.start), 0x21, ...u32(index),
+        0x02, 0x40,
+        0x03, 0x40,
+        0x20, ...u32(index), ...compileExpr(s.end), 0x48, 0x45, 0x0d, ...u32(1),
+        ...flatMap(s.body, compileStmt),
+        0x20, ...u32(index), 0x41, 0x01, 0x6a, 0x21, ...u32(index),
+        0x0c, ...u32(0),
+        0x0b, 0x0b,
+      ]
+    }
     case "return":
       return [...(s.value ? compileExpr(s.value) : []), 0x0f]
     case "trap":
@@ -194,8 +192,6 @@ const compileStmt = (s: Stmt, stack: LabelFrame[] = []): number[] => {
       return [0x41, ...sN(logs.get(s.message)!, 32), ...compileExpr(s.value), 0x10, 0x01]
     case "call.void":
       return [...flatMap(s.args, compileExpr), 0x10, ...u32(fix.get(s.target)! + 2)]
-    case "expr":
-      return [...compileExpr(s.expr), 0x1a]
     default:
       return die(s)
   }
@@ -242,12 +238,9 @@ export const emitModule = <T extends ModuleDef>({ fEntries, builtFuncs, fix, lay
       ...u32(builtFuncs.length),
       ...flatMap(builtFuncs, ({ func, built, locals, localIndexes }) => {
         const compiler = makeCompiler(fix, localIndexes, layouts, traps, logs, globals)
-        const stmts = asStmts(built)
         const decls = [...u32(locals.length), ...flatMap(locals, ([, type]) => [...u32(1), codes.type[type]])]
         const result = resultType(func.result)
-        const code = stmts
-          ? [...flatMap(stmts, s => compiler.stmt(s)), ...(result === "void" ? [] : codes.zero[result])]
-          : compiler.expr(built as AnyExpr)
+        const code = [...flatMap(built, s => compiler.stmt(s)), ...(result === "void" ? [] : codes.zero[result])]
         const body = [...decls, ...code, 0x0b]
         return [...u32(body.length), ...body]
       }),

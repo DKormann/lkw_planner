@@ -1,4 +1,12 @@
-export * from "./ast"
+export {
+  array, boundsCheck, exp, f32, f64, fn, for_, global, i32, i64, i64u,
+  ifElse, log, return_, struct, trap, variable, when, while_,
+} from "./ast"
+export type {
+  AnyArray, AnyFunc, ArgsVal, ArrayHandle, CompileResult, DType, Expr, ExprLike,
+  GlobalValue, JSStruct, LocalVar, ModuleDef, MutableStruct, MutableValue,
+  NumType, StructType, Value,
+} from "./ast"
 export { formatModule } from "./format"
 
 import { analyzeModule } from "./analyze"

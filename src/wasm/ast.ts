@@ -29,6 +29,10 @@ export type TypedArrayFor<T extends MemoryType> =
 type ArgsExpr<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? Expr<Args[K]>: never }
 type ArgsLike<Args extends readonly NumType[]> = { [K in keyof Args]: Args[K] extends NumType ? ExprLike<Args[K]>: never }
 export type ArgsVal<Args extends readonly NumType[]>  = { [K in keyof Args]: Args[K] extends NumType ? Value<Args[K]> : never }
+type FnReturn<R extends ResultType> =
+  R extends NumType ? Expr<R> | void :
+  R extends StructType<infer F> ? StructValue<F> | void :
+  void
 
 type LocalNode<T extends NumType> = { kind: "local.get", type: T, local: number }
 type GlobalNode<T extends NumType> = { kind: "global.get", type: T, initial: Value<T> }
@@ -57,28 +61,24 @@ export type Stmt =
   | { kind: "array.store", array: AnyArray, type: MemoryType, index: Expr<"i32">, stride: number, offset: number, value: Expr<NumType> }
   | { kind: "array.move", array: AnyArray, target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32"> }
   | { kind: "if", cond: Expr<"i32">, then: Stmt[], else: Stmt[] }
-  | { kind: "block", control: number, body: Stmt[] }
-  | { kind: "loop", control: number, cond: Expr<"i32">, body: Stmt[] }
-  | { kind: "break", target: number | null }
-  | { kind: "continue", target: number | null }
+  | { kind: "loop", cond: Expr<"i32">, body: Stmt[] }
+  | { kind: "for", local: number, start: Expr<"i32">, end: Expr<"i32">, body: Stmt[] }
   | { kind: "return", value?: Expr<NumType> }
   | { kind: "call.void", target: AnyFunc, args: Expr<NumType>[] }
   | { kind: "trap", message: string }
   | { kind: "log", message: string, value: Expr<"i32"> }
-  | { kind: "expr", expr: Expr<NumType> }
-
-export type BlockHandle = { kind: "block", id: number }
-export type LoopHandle = { kind: "loop", id: number }
-type ControlHandle = BlockHandle | LoopHandle
 
 class MutableMethods<T extends NumType> extends ExprMethods<T> {
   declare type: T
-  declare write: (value: Expr<T>) => Stmt
-  set(value: ExprLike<T>) { return this.write(lit(this.type, value)) }
+  declare write: (value: Expr<T>) => Stmt | void
+  set(value: ExprLike<T>): void {
+    const statement = this.write(lit(this.type, value))
+    if (statement) emit(statement)
+  }
 }
-type MutableArithmetic<T extends NumType> = { [Op in ArithmeticOp as `i${Op}`]: (right: ExprLike<T>) => Stmt }
-type MutableInteger<T extends IntType> = { [Op in "and" | "or" | "xor" as `i${Op}`]: (right: ExprLike<T>) => Stmt }
-export type MutableValue<T extends NumType> = Expr<T> & { set(value: ExprLike<T>): Stmt } & MutableArithmetic<T> & (T extends IntType ? MutableInteger<T> : {})
+type MutableArithmetic<T extends NumType> = { [Op in ArithmeticOp as `i${Op}`]: (right: ExprLike<T>) => void }
+type MutableInteger<T extends IntType> = { [Op in "and" | "or" | "xor" as `i${Op}`]: (right: ExprLike<T>) => void }
+export type MutableValue<T extends NumType> = Expr<T> & { set(value: ExprLike<T>): void } & MutableArithmetic<T> & (T extends IntType ? MutableInteger<T> : {})
 export type LocalVar<T extends NumType> = MutableValue<T> & LocalNode<T>
 export type GlobalValue<T extends NumType> = MutableValue<T> & GlobalNode<T>
 export type AnyGlobal = GlobalValue<NumType>
@@ -92,7 +92,7 @@ export type ArrayHandle<T extends DType> = {
   length: number
   elementSize: number
   at(index: ExprLike<"i32">): ArrayValue<T>
-  move(target: ExprLike<"i32">, source: ExprLike<"i32">, count: ExprLike<"i32">): Stmt
+  move(target: ExprLike<"i32">, source: ExprLike<"i32">, count: ExprLike<"i32">): void
 }
 
 export type BitStorageType = "i8" | "u8" | "i16" | "u16" | "i32"
@@ -120,31 +120,25 @@ export type StructInit<F extends StructFields> = { [K in keyof F]: ExprLike<Fiel
 export type JSStruct<F extends StructFields> = { [K in keyof F]: Value<FieldValue<F[K]>> }
 export type StructValue<F extends StructFields> = StructMembers<F> & { packed: AnyExpr }
 export type MutableStruct<F extends StructFields> = StructValue<F> & MutableStructMembers<F> & {
-  set(value: MutableStruct<F> | StructInit<F>): Stmt
+  set(value: MutableStruct<F> | StructInit<F>): void
 }
 export type ExprLike<T extends NumType> = Expr<T> | Value<T>
-export type StmtBody = Stmt | StmtBody[]
-type ControlBody<H extends ControlHandle> = StmtBody | ((self: H) => StmtBody)
-export type FuncBody<R extends ResultType> =
-  R extends NumType ? Expr<R> | StmtBody :
-  R extends StructType<infer F> ? StructValue<F> | StmtBody :
-  StmtBody
 export type FuncHandle<A extends readonly NumType[], R extends ResultType> = {
   kind: "func"
   params: A
   result: R
-  build: (...args: readonly Expr<NumType>[]) => FuncBody<R>
+  build: (...args: readonly Expr<NumType>[]) => Stmt[]
   call: (...args: ArgsLike<A>) =>
     R extends NumType ? Expr<R> :
     R extends StructType<infer F> ? StructValue<F> :
-    Stmt
+    void
 }
 
 export type AnyFunc = {
   kind: "func"
   params: readonly NumType[]
   result: ResultType
-  build: (...args: readonly AnyExpr[]) => any
+  build: (...args: readonly AnyExpr[]) => Stmt[]
   call: (...args: any[]) => AnyExpr
 }
 
@@ -154,7 +148,7 @@ export type AnyArray = {
   length: number
   elementSize: number
   at(...args: any[]): any
-  move(...args: any[]): Stmt
+  move(...args: any[]): void
 }
 
 export type ModuleDef = Record<string, AnyFunc | AnyArray | AnyGlobal>
@@ -179,7 +173,24 @@ export type CompileResult<T extends ModuleDef> = {
 
 
 let nextLocalId = 0
-let nextControlId = 0
+const recordingStack: Stmt[][] = []
+let recordingPaused = 0
+
+const recording = () => recordingPaused ? undefined : recordingStack.at(-1)
+const emit = <S extends Stmt>(statement: S): S => {
+  recording()?.push(statement)
+  return statement
+}
+const capture = (build: () => void): Stmt[] => {
+  const statements: Stmt[] = []
+  recordingStack.push(statements)
+  try { build() } finally { recordingStack.pop() }
+  return statements
+}
+const withoutRecording = <T>(build: () => T): T => {
+  recordingPaused++
+  try { return build() } finally { recordingPaused-- }
+}
 
 const inferType = <T extends NumType>(value: ExprLike<T>) =>
   (typeof value === "object" && value !== null && "type" in value ? value.type : "i32") as T
@@ -194,46 +205,20 @@ export const lit = <T extends NumType>(type: T, value: ExprLike<T>): Expr<T> => 
   }
   return expr({ kind: "const", type, value: value as Value<T> })
 }
-const mutable = <T extends NumType>(node: CoreExpr<T>, write: (value: Expr<T>) => Stmt) =>
+const mutable = <T extends NumType>(node: CoreExpr<T>, write: (value: Expr<T>) => Stmt | void) =>
   Object.assign(Object.setPrototypeOf(node, MutableMethods.prototype), { write }) as MutableValue<T>
 
-const isStmt = (x: unknown): x is Stmt =>
-  !!x && typeof x === "object" && "kind" in x && (
-    (x as Stmt).kind === "if" ? Array.isArray((x as { then?: unknown }).then) :
-    !["const", "local.get", "global.get", "bin", "call", "cast", "load", "cmp"].includes((x as { kind: string }).kind)
-  )
-
-const stmtList = (body: StmtBody): Stmt[] => Array.isArray(body) ? body.flatMap(stmtList) : [body]
-export const asStmts = <R extends ResultType>(body: FuncBody<R>) => isStmt(body) ? [body] : Array.isArray(body) ? stmtList(body) : null
-const bindStmts = (body: StmtBody, br: number, loop: number | null): Stmt[] =>
-  stmtList(body).map(s => bindStmt(s, br, loop))
-
-const bindStmt = (s: Stmt, br: number, loop: number | null): Stmt => {
-  switch (s.kind) {
-    case "if": return { ...s, then: bindStmts(s.then, br, loop), else: bindStmts(s.else, br, loop) }
-    case "break": return { ...s, target: s.target ?? br }
-    case "continue":
-      if (s.target != null) return s
-      if (loop == null) throw new Error("continueTo() used outside a loop")
-      return { ...s, target: loop }
-    default: return s
-  }
-}
-
-const controlBody = <H extends ControlHandle>(self: H, body: ControlBody<H>) =>
-  bindStmts(typeof body === "function" ? body(self) : body, self.id, self.kind === "loop" ? self.id : null)
-
 const bin = <T extends NumType>(op: ArithmeticOp, left: Expr<T>, right: ExprLike<T>): Expr<T> =>
-  expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>)
+  recordExpr(expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>))
 
 const bit = <T extends IntType>(op: BitOp, left: Expr<T>, right: ExprLike<T>): Expr<T> =>
-  expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>)
+  recordExpr(expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>))
 
 const remainder = <T extends IntType>(op: RemainderOp, left: Expr<T>, right: ExprLike<T>) =>
-  expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>)
+  recordExpr(expr<T>({ kind: "bin", type: left.type, op, left, right: lit<T>(left.type as T, right) as unknown as Expr<T> } as CoreExpr<T>))
 
 const cmp = <T extends NumType>(op: CmpOp, left: Expr<T>, right: ExprLike<T>): Expr<"i32"> =>
-  expr<"i32">({ kind: "cmp", type: "i32", inputType: left.type, op, left: left as unknown as Expr<NumType>, right: lit<T>(left.type as T, right) as unknown as Expr<NumType> } as CoreExpr<"i32">)
+  recordExpr(expr<"i32">({ kind: "cmp", type: "i32", inputType: left.type, op, left: left as unknown as Expr<NumType>, right: lit<T>(left.type as T, right) as unknown as Expr<NumType> } as CoreExpr<"i32">))
 
 export const allocateLocal = <T extends NumType>(type: T) => expr({ kind: "local.get", type, local: nextLocalId++ })
 
@@ -242,10 +227,20 @@ const mkLocal = <T extends NumType>(type: T): LocalVar<T> => {
   return mutable({ kind: "local.get", type, local }, value => ({ kind: "local.set", local, type, value: value as Expr<NumType> })) as LocalVar<T>
 }
 
+// In recorded functions, constructing a computation fixes its value at that
+// point in the flow. The local is compiler IR; authors only keep the returned
+// expression in an ordinary JS variable.
+const recordExpr = <T extends NumType>(value: Expr<T>): Expr<T> => {
+  if (!recording()) return value
+  const snapshot = mkLocal<T>(value.type as T)
+  snapshot.set(value)
+  return snapshot
+}
+
 const mkHandle = <A extends readonly NumType[], R extends ResultType>(
   params: A,
   result: R,
-  build: (...args: readonly Expr<NumType>[]) => FuncBody<R>,
+  build: (...args: readonly Expr<NumType>[]) => Stmt[],
 ): FuncHandle<A, R> => {
   let handle!: FuncHandle<A, R>
   handle = {
@@ -253,9 +248,9 @@ const mkHandle = <A extends readonly NumType[], R extends ResultType>(
     params, result, build,
     call: (...args: ArgsLike<A>) => {
       const callArgs = params.map((type, i) => lit(type, args[i] as ExprLike<typeof type>)) as Expr<NumType>[]
-      if (result === "void") return { kind: "call.void", target: handle, args: callArgs }
+      if (result === "void") return emit({ kind: "call.void", target: handle, args: callArgs })
       const type = (typeof result === "string" ? result : result.storage === "i64" ? "i64" : "i32") as NumType
-      const call = expr({ kind: "call", type, target: handle, args: callArgs })
+      const call = recordExpr(expr({ kind: "call", type, target: handle, args: callArgs }))
       return typeof result === "string" ? call : readStruct(result, call)
     },
   } as FuncHandle<A, R>
@@ -307,10 +302,10 @@ const packedFieldValue = (backing: StructBacking, field: FieldLayout) => {
 }
 
 const readStruct = <F extends StructFields>(type: StructType<F>, packed: AnyExpr): StructValue<F> =>
-  Object.assign(Object.fromEntries(Object.keys(type.fields).map(name => [name, readField(packed, type.layout[name]!)])), { packed }) as StructValue<F>
+  withoutRecording(() => Object.assign(Object.fromEntries(Object.keys(type.fields).map(name => [name, readField(packed, type.layout[name]!)])), { packed })) as StructValue<F>
 
 const structValue = <F extends StructFields>(type: StructType<F>, packed: StructBacking): MutableStruct<F> => {
-  const fields = Object.fromEntries(Object.keys(type.fields).map(name => [name, packedFieldValue(packed, type.layout[name]!)]))
+  const fields = withoutRecording(() => Object.fromEntries(Object.keys(type.fields).map(name => [name, packedFieldValue(packed, type.layout[name]!) ])))
   return Object.assign(fields, { packed, set: (value: MutableStruct<F> | StructInit<F>) =>
     packed.set("packed" in value ? (value as InternalStruct<F>).packed : packStruct(type, value)) }) as InternalStruct<F>
 }
@@ -347,7 +342,7 @@ export const struct = <const F extends StructFields>(fields: F): StructType<F> =
 }
 
 const cast = <T extends NumType>(type: T, value: Expr<NumType>, unsigned = false): Expr<T> =>
-  value.type === type ? value as unknown as Expr<T> : expr<T>({ kind: "cast", type, inputType: value.type, unsigned, value } as CoreExpr<T>)
+  value.type === type ? value as unknown as Expr<T> : recordExpr(expr<T>({ kind: "cast", type, inputType: value.type, unsigned, value } as CoreExpr<T>))
 const number = <T extends NumType>(type: T, value: unknown): Expr<T> =>
   typeof value === (type === "i64" ? "bigint" : "number")
     ? expr({ kind: "const", type, value } as CoreExpr<T>)
@@ -371,13 +366,8 @@ export function f64(value: number): Expr<"f64">
 export function f64<T extends NumType>(value: Expr<T>): Expr<"f64">
 export function f64(value: F32Input) { return number("f64", value) }
 
-export function ifElse<T extends NumType>(cond: Expr<"i32">, then: Expr<T>, else_: Expr<T>): Expr<T>
-export function ifElse(cond: Expr<"i32">, then: StmtBody, else_?: StmtBody): Stmt
-export function ifElse<T extends NumType>(cond: Expr<"i32">, then: Expr<T> | StmtBody, else_?: Expr<T> | StmtBody): Expr<T> | Stmt {
-  return isStmt(then) || Array.isArray(then)
-    ? { kind: "if", cond, then: stmtList(then as StmtBody), else: else_ === undefined ? [] : stmtList(else_ as StmtBody) }
-    : expr<T>({ kind: "if", type: then.type, cond, then, else: else_ as Expr<T> } as CoreExpr<T>)
-}
+export const ifElse = <T extends NumType>(cond: Expr<"i32">, then: Expr<T>, else_: Expr<T>): Expr<T> =>
+  recordExpr(expr<T>({ kind: "if", type: then.type, cond, then, else: else_ } as CoreExpr<T>))
 
 const arithmetic = Object.fromEntries(arithmeticOps.map(op => [op,
   <T extends NumType>(left: Expr<T>, right: ExprLike<T>) => bin(op, left, right),
@@ -413,8 +403,20 @@ export const { and, or, xor, shl, shr } = bits
 export const { mod, umod } = remainders
 export const { eq, lt, gt } = comparisons
 
-export const func = <const A extends readonly NumType[], R extends ResultType>(params: A, result: R, build: (...args: ArgsExpr<A>) => FuncBody<R>) =>
-  mkHandle(params, result, build as (...args: readonly Expr<NumType>[]) => FuncBody<R>)
+export const fn = <const A extends readonly NumType[], R extends ResultType>(
+  params: A,
+  result: R,
+  build: (...args: ArgsExpr<A>) => FnReturn<R>,
+) => mkHandle(params, result, ((...args: ArgsExpr<A>) => {
+  let returned = undefined as FnReturn<R>
+  const statements = capture(() => { returned = build(...args) })
+  if (Array.isArray(returned)) throw new Error("WASM functions record statements; returning statement arrays is not supported")
+  if (returned !== undefined) {
+    const value = typeof returned === "object" && "packed" in returned ? returned.packed : returned
+    statements.push({ kind: "return", value: value as Expr<NumType> })
+  }
+  return statements
+}) as (...args: readonly Expr<NumType>[]) => Stmt[])
 export function array<T extends DType>(type: T, length: number): ArrayHandle<T> {
   if (!Number.isInteger(length) || length <= 0) throw new Error(`Invalid array length ${length}`)
   const struct = typeof type === "object" ? type : null
@@ -427,7 +429,7 @@ export function array<T extends DType>(type: T, length: number): ArrayHandle<T> 
       const value = memoryValue(handle, index, storage, elementSize)
       return struct ? structValue(struct, value) : value
     },
-    move: (target, source, count) => ({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
+    move: (target, source, count) => emit({ kind: "array.move", array: handle, target: lit("i32", target), source: lit("i32", source), count: lit("i32", count) }),
   }
   return handle as ArrayHandle<T>
 }
@@ -440,16 +442,29 @@ type LocalFactory = {
   <F extends StructFields>(type: StructType<F>): MutableStruct<F>
 }
 
-export const local = (<T extends NumType, F extends StructFields>(type: T | StructType<F>) =>
+const local = (<T extends NumType, F extends StructFields>(type: T | StructType<F>) =>
   typeof type === "string" ? mkLocal(type) : mkStructLocal(type)) as LocalFactory
 
-const expImpl = func(["f32"], "f32", x => {
-  const y = local("f32")
-  return [
-    y.set(ifElse(x.lt(-16), f32(-16), ifElse(x.gt(16), f32(16), x)).div(2048).add(1)),
-    ...Array.from({ length: 11 }, () => y.imul(y)),
-    ret(y),
-  ]
+export function variable(initial: number): LocalVar<"i32">
+export function variable(initial: bigint): LocalVar<"i64">
+export function variable<T extends NumType>(initial: Expr<T>): LocalVar<T>
+export function variable<T extends NumType>(initial: ExprLike<T>): LocalVar<T>
+export function variable<F extends StructFields>(type: StructType<F>, initial?: MutableStruct<F> | StructInit<F>): MutableStruct<F>
+export function variable(initialOrType: any, initial?: any): any {
+  if (typeof initialOrType === "object" && initialOrType.kind === "struct") {
+    const value = local(initialOrType)
+    if (initial !== undefined) value.set(initial)
+    return value
+  }
+  const value = local(inferType(initialOrType))
+  value.set(initialOrType)
+  return value
+}
+
+const expImpl = fn(["f32"], "f32", x => {
+  const y = variable(ifElse(x.lt(-16), f32(-16), ifElse(x.gt(16), f32(16), x)).div(2048).add(1))
+  for (let i = 0; i < 11; i++) y.imul(y)
+  return y
 })
 export const exp = (value: ExprLike<"f32">) => expImpl.call(value)
 
@@ -460,29 +475,32 @@ export const global = <T extends NumType>(type: T, initial: Value<T>): GlobalVal
   return value
 }
 
-export function ret(): Stmt
-export function ret<T extends NumType>(value: ExprLike<T>): Stmt
-export function ret(value: { packed: AnyExpr }): Stmt
-export function ret<T extends NumType>(value?: ExprLike<T> | { packed: AnyExpr }): Stmt {
-  if (value === undefined) return { kind: "return" }
-  if (typeof value === "object" && "packed" in value) return { kind: "return", value: value.packed }
-  return { kind: "return", value: lit(inferType(value), value) as Expr<NumType> }
+export const return_ = <T extends NumType>(value?: ExprLike<T> | { packed: AnyExpr }): void => {
+  if (value === undefined) emit({ kind: "return" })
+  else if (typeof value === "object" && "packed" in value) emit({ kind: "return", value: value.packed })
+  else emit({ kind: "return", value: lit(inferType(value), value) as Expr<NumType> })
 }
-export const trap = (message: string): Stmt => ({ kind: "trap", message })
-export const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): Stmt => {
+export const trap = (message: string): void => { emit({ kind: "trap", message }) }
+export const boundsCheck = (array: AnyArray, index: ExprLike<"i32">, count: ExprLike<"i32"> = 1): void => {
   const i = lit("i32", index), n = lit("i32", count)
-  return ifElse(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), trap("array bounds exceeded"))
+  when(i.lt(0).or(n.lt(0)).or(n.gt(array.length)).or(i.gt(i32(array.length).sub(n))), () => trap("array bounds exceeded"))
 }
-export const log = (message: string, value: ExprLike<"i32">): Stmt => ({ kind: "log", message, value: lit("i32", value) })
-export const block = (body: ControlBody<BlockHandle>): Stmt => {
-  const self: BlockHandle = { kind: "block", id: nextControlId++ }
-  return { kind: "block", control: self.id, body: controlBody(self, body) }
-}
-export const loop = (cond: Expr<"i32">, body: ControlBody<LoopHandle>): Stmt => {
-  const self: LoopHandle = { kind: "loop", id: nextControlId++ }
-  return { kind: "loop", control: self.id, cond, body: controlBody(self, body) }
+export const log = (message: string, value: ExprLike<"i32">): void => { emit({ kind: "log", message, value: lit("i32", value) }) }
+
+/** Recorded control flow. Callbacks capture their statements into nested IR. */
+export const when = (condition: ExprLike<"i32">, then: () => void, else_?: () => void): void => {
+  emit({ kind: "if", cond: lit("i32", condition), then: capture(then), else: else_ ? capture(else_) : [] })
 }
 
-export const breakTo = (target?: ControlHandle): Stmt => ({ kind: "break", target: target?.id ?? null })
-export const continueTo = (target?: LoopHandle): Stmt => ({ kind: "continue", target: target?.id ?? null })
-export const exprStmt = <T extends NumType>(value: Expr<T>): Stmt => ({ kind: "expr", expr: value as Expr<NumType> })
+/** A callback keeps the condition live so it is evaluated on every iteration. */
+export const while_ = (condition: () => Expr<"i32">, body: () => void): void => {
+  let cond!: Expr<"i32">
+  const conditionStatements = capture(() => { cond = condition() })
+  recording()?.push(...conditionStatements)
+  emit({ kind: "loop", cond, body: [...capture(body), ...conditionStatements] })
+}
+
+export const for_ = (start: ExprLike<"i32">, end: ExprLike<"i32">, body: (index: LocalVar<"i32">) => void): void => {
+  const index = mkLocal("i32")
+  emit({ kind: "for", local: index.local, start: lit("i32", start), end: lit("i32", end), body: capture(() => body(index)) })
+}
