@@ -4,16 +4,18 @@ import { hightLights } from "../view/main";
 import { baselineAnnealing, type AnnealingResult } from "./annealing_baseline";
 import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnnealingSession } from "./annealing_improved";
 import { annealingWasm } from "./annealing_wasm";
+import { annealingWasmImproved } from "./annealing_wasm_improved";
 import { AVG_SPEED_KMH, getDeck, getReq, initAnnealingState, isLoad, KM_COST_CENTS, REORG_COST_CENTS, scoreRoute } from "./annealing_shared";
 
 export const availableSolvers = {
   baseline: baselineAnnealing,
   improved: improvedAnnealing,
   wasm: annealingWasm,
+  wasmImproved: annealingWasmImproved,
 } as const;
 type SolverName = keyof typeof availableSolvers;
 
-const INITIAL_SOLVER: SolverName = "wasm";
+const INITIAL_SOLVER: SolverName = "wasmImproved";
 const euros = (cents: number) => `${(cents / 100).toFixed(2)}€`;
 
 class ScoreMismatchError extends Error {}
@@ -169,7 +171,15 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
             },
             {
               onmouseenter: () => {
-                hightLights.set([{ points: [{ number: start, logo: "🚛" }] }]);
+                const points = [{ number: start, logo: "🚛" }];
+                if (annealer) {
+                  for (let i = 0; i < annealer.scheduleSizes[tran]!; i++) {
+                    const step = annealer.schedule[tran * annealer.TSIZE + i]!;
+                    const request = mod.requests[getReq(step)]!;
+                    points.push({ number: isLoad(step) ? request.startPoint : request.endPoint, logo: "" });
+                  }
+                }
+                hightLights.set([{ points }]);
               },
               onmouseleave: () => {
                 hightLights.set([]);

@@ -1,4 +1,4 @@
-import {stat, readdir, writeFile} from "fs/promises"
+import {stat, readdir, writeFile, mkdir} from "fs/promises"
 
 const argv = process.argv.slice(2)
 let devVersion = 0
@@ -57,8 +57,58 @@ const isolationHeaders = {
 Bun.serve({
   port,
   async fetch(req){
-    let path = req.url.split("/").filter(x=>x.length>0).slice(2)
+    const url = new URL(req.url)
+    let path = url.pathname.split("/").filter(x=>x.length>0)
     if (path[0] == "version") return new Response(String(devVersion), {headers: isolationHeaders})
+    if (path.at(-1) == "real-roadmap.json") {
+      const roadmap = Bun.file("./data/real-roadmap/germany-car-dealers-latest.json")
+      if (!await roadmap.exists()) return new Response("Real roadmap cache has not been built", { status: 404, headers: isolationHeaders })
+      return new Response(await roadmap.bytes(), {headers: {...isolationHeaders, "Content-Type": "application/json"}})
+    }
+    if (path.at(-1) == "route-geometry") {
+      try {
+        const from = Number(url.searchParams.get("from"))
+        const to = Number(url.searchParams.get("to"))
+        if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) {
+          return new Response("Invalid dealer pair", { status: 400, headers: isolationHeaders })
+        }
+        const roadmap = await Bun.file("./data/real-roadmap/germany-car-dealers-latest.json").json() as {
+          sites: { lon: number, lat: number }[]
+        }
+        if (!roadmap.sites[from] || !roadmap.sites[to]) {
+          return new Response("Unknown dealer", { status: 404, headers: isolationHeaders })
+        }
+        const a = Math.min(from, to), b = Math.max(from, to)
+        const cachePath = `./data/real-roadmap/routes/${a}-${b}.json`
+        const cached = Bun.file(cachePath)
+        let coordinates: number[][]
+        if (await cached.exists()) {
+          coordinates = (await cached.json() as { coordinates: number[][] }).coordinates
+        } else {
+          const key = process.env["ORS_API_KEY"]
+          if (!key) return new Response("ORS_API_KEY is not configured", { status: 503, headers: isolationHeaders })
+          const response = await fetch("https://api.openrouteservice.org/v2/directions/driving-hgv/geojson", {
+            method: "POST",
+            headers: { authorization: key, "content-type": "application/json" },
+            body: JSON.stringify({
+              coordinates: [roadmap.sites[a]!, roadmap.sites[b]!].map(site => [site.lon, site.lat]),
+              instructions: false,
+            }),
+          })
+          if (!response.ok) return new Response("ORS could not route this dealer pair", { status: 502, headers: isolationHeaders })
+          const result = await response.json() as { features?: { geometry?: { coordinates?: number[][] } }[] }
+          coordinates = result.features?.[0]?.geometry?.coordinates ?? []
+          if (coordinates.length < 2) return new Response("ORS returned no route geometry", { status: 502, headers: isolationHeaders })
+          await mkdir("./data/real-roadmap/routes", { recursive: true })
+          await writeFile(cachePath, JSON.stringify({ coordinates }))
+        }
+        const requestedCoordinates = from === a ? coordinates : [...coordinates].reverse()
+        return Response.json({ coordinates: requestedCoordinates }, { headers: isolationHeaders })
+      } catch (error) {
+        console.error("route geometry failed", error)
+        return new Response("Route geometry failed", { status: 500, headers: isolationHeaders })
+      }
+    }
     if (path.length == 0) return new Response(await Bun.file("./index.html").bytes(), {headers: {...isolationHeaders, "Content-Type": "text/html"}})
     return new Response(await Bun.file("./index.js").bytes(), {headers: {...isolationHeaders, "Content-Type": "application/javascript"}})
   }
