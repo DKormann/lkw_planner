@@ -1,4 +1,4 @@
-import { annealingWasmImproved } from "../src/planners/annealing_wasm_improved"
+import { annealingWasm } from "../src/planners/annealing_wasm"
 import { randomModule } from "../src/types"
 
 const modules = Array.from({ length: 6 }, () => randomModule())
@@ -9,7 +9,7 @@ const results = []
 for (const count of steps) {
   const runs = []
   for (const rngSeed of seeds) for (const mod of modules) {
-    const result = await annealingWasmImproved(mod, { steps: count, rngSeed })
+    const result = await annealingWasm(mod, { steps: count, rngSeed })
     runs.push({ score: result.totalScore / 100, ms: result.elapsedMs })
   }
   results.push({

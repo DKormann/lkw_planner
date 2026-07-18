@@ -6,13 +6,14 @@ import { randomModule, randomUUID, Request, Schedule, UUID } from "../types";
 import { mkStored, mkWritable, type Writable } from "../writeable";
 import { setRandSeed } from "../random";
 import { number } from "../schema";
-import { plannerView } from "../planners/annealing";
+import { plannerView } from "../planners/viewPlan";
 import { setUpWasm, wasmView } from "./wasmview";
 import { realModule, realRoadMapFromCache, type RealRoadMapCache } from "../real_roadmap";
 
 
-export let LKW_COUNT = mkStored("LKW_COUNT", number,  5)
-let REQUEST_COUNT = mkStored("REQUEST_COUNT",  number, 20)
+// Versioned keys intentionally reset the earlier small UI demo defaults (5/20).
+export let LKW_COUNT = mkStored("LKW_COUNT_V2", number, 40)
+let REQUEST_COUNT = mkStored("REQUEST_COUNT_V2", number, 200)
 
 body.style.margin = "0"
 

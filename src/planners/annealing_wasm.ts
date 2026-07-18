@@ -1,13 +1,26 @@
 import type { Module } from "../types"
 import { array, compile, exp, f32, func, global, i32, i64u, ifElse, lit, local, log, loop, ret, struct, trap, type AnyArray, type ArrayHandle, type DType, type Expr, type ExprLike, type Stmt, type StmtBody } from "../wasm"
 import type { AnnealingResult } from "./annealing_baseline"
-import { AVG_SPEED_KMH, INF, KM_COST_CENTS, REORG_COST_CENTS } from "./annealing_shared"
+import { INF, KM_COST_CENTS, REORG_COST_CENTS } from "./annealing_shared"
 
-const SEARCH_STEPS = 1_600_000
 const TEMP_PHASES = 1_000
-const STEPS_PER_PHASE = Math.floor(SEARCH_STEPS / TEMP_PHASES)
-const START_TEMP_CENTS = 5_000
 const END_TEMP_CENTS = 0
+
+export type WasmSearchParams = {
+  steps: number
+  startTemperature: number
+  nudgeRadius: number
+  assignWeight: number
+  unassignWeight: number
+  nudgeWeight: number
+  relocateWeight: number
+  rngSeed: number
+}
+export const defaultWasmSearchParams: WasmSearchParams = {
+  steps: 1_600_000, startTemperature: 2_500, nudgeRadius: 4,
+  assignWeight: 3, unassignWeight: 1, nudgeWeight: 3, relocateWeight: 3,
+  rngSeed: 1,
+}
 
 const DEBUG = false
 
@@ -41,7 +54,13 @@ function forN(n: number, body: (i: Expr<"i32">) => StmtBody): StmtBody {
   return [i.set(0), loop(i.lt(n), [body(i), i.iadd(1)])]
 }
 
-export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
+export async function annealingWasm(planner: Module, options: Partial<WasmSearchParams> = {}): Promise<AnnealingResult> {
+  const params = { ...defaultWasmSearchParams, ...options }
+  const stepsPerPhase = Math.floor(params.steps / TEMP_PHASES)
+  const assignEnd = params.assignWeight
+  const unassignEnd = assignEnd + params.unassignWeight
+  const nudgeEnd = unassignEnd + params.nudgeWeight
+  const totalWeight = nudgeEnd + params.relocateWeight
   const TSIZE = Math.floor(planner.NREQS / planner.NTRANS * 2.5 * 2 + 10)
   const NPOINTS = planner.roadmap.points.length
   const STOP = struct({
@@ -56,7 +75,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     deadline: "u16",
   })
 
-  const randState      = global("i32", 1)
+  const randState      = global("i32", params.rngSeed || 1)
   const dists          = checkedArray("i32", planner.RSIZE)
   const requests       = checkedArray(REQ, planner.NREQS)
   const assigned       = checkedArray("u8", planner.NREQS)
@@ -85,13 +104,12 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   ])
 
   const roadCost = func(["i32", "i32"], "i32", (from, to) => {
-    const a = local("i32"), b = local("i32"), tmp = local("i32"), index = local("i32")
+    const lo = local("i32"), index = local("i32")
     return [
-      a.set(from), b.set(to),
-      ifElse(a.lt(b), [tmp.set(a), a.set(b), b.set(tmp)]),
-      index.set(a.add(b.mul(NPOINTS))),
-      ifElse(index.gt(planner.RSIZE), index.set(i32(NPOINTS ** 2).sub(index))),
-      ret(dists.at(index)),
+      lo.set(to.add(from.sub(to).mul(from.lt(to)))),
+      index.set(from.add(to).sub(lo).add(lo.mul(NPOINTS))),
+      index.set(index.add(index.gt(planner.RSIZE).mul(i32(NPOINTS ** 2).sub(index.mul(2))))),
+      ret(dists.at(index).mul(from.eq(to).eq(0))),
     ]
   })
 
@@ -159,7 +177,7 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
         nextPos.set(ifElse(step.is_load, request.start, request.end)),
         distance.set(roadCost.call(pos, nextPos)),
         cost.iadd(distance.mul(KM_COST_CENTS)),
-        elapsedMinutes.iadd(distance.mul(60).div(AVG_SPEED_KMH)),
+        elapsedMinutes.iadd(distance),
         pos.set(nextPos),
         deck.set(ifElse(step.deck, deck1, deck0)),
         deckSize.set(ifElse(step.deck, deckSize1, deckSize0)),
@@ -234,6 +252,107 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
     ]
   })
 
+
+  const tryRelocate = func(["i32"], "void", temperature => {
+    const src = local("i32"), dst = local("i32"), req = local("i32"), deck = local("i32")
+    const A = local("i32"), B = local("i32"), C = local("i32"), D = local("i32"), i = local("i32")
+    const srcSize = local("i32"), dstSize = local("i32"), srcOffset = local("i32"), dstOffset = local("i32")
+    const previousScore = local("i32"), nextSrc = local("i32"), nextDst = local("i32"), step = local(STOP)
+    const srcView = {
+      move: (target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32">): StmtBody =>
+        schedule.move(srcOffset.add(target), srcOffset.add(source), count),
+      at: (index: Expr<"i32">) => schedule.at(srcOffset.add(index)),
+    }
+    const dstView = {
+      move: (target: Expr<"i32">, source: Expr<"i32">, count: Expr<"i32">): StmtBody =>
+        schedule.move(dstOffset.add(target), dstOffset.add(source), count),
+      at: (index: Expr<"i32">) => schedule.at(dstOffset.add(index)),
+    }
+    return [
+      src.set(randint.call(planner.NTRANS)), dst.set(randint.call(planner.NTRANS)),
+      ifElse(src.eq(dst), ret()),
+      srcSize.set(sched_size.at(src)), dstSize.set(sched_size.at(dst)),
+      ifElse(srcSize.lt(2).or(dstSize.gt(TSIZE - 2)), ret()),
+      srcOffset.set(src.mul(TSIZE)), dstOffset.set(dst.mul(TSIZE)),
+      step.set(srcView.at(randint.call(srcSize))), req.set(step.req_id), deck.set(step.deck),
+      A.set(-1), B.set(-1),
+      loop(i.lt(srcSize), [
+        step.set(srcView.at(i)),
+        ifElse(step.req_id.eq(req), ifElse(A.eq(-1), A.set(i), B.set(i))),
+        i.iadd(1),
+      ]),
+      ifElse(A.eq(-1).or(B.eq(-1)), ret()),
+      previousScore.set(ratings.at(src).add(ratings.at(dst))),
+      srcView.move(A, A.add(1), B.sub(A).sub(1)),
+      srcView.move(B.sub(1), B.add(1), srcSize.sub(B).sub(1)),
+      sched_size.at(src).set(srcSize.sub(2)),
+      C.set(randint.call(dstSize.add(1))), D.set(C.add(randint.call(4))),
+      ifElse(D.gt(dstSize), D.set(dstSize)),
+      dstView.move(D.add(2), D, dstSize.sub(D)),
+      dstView.move(C.add(1), C, D.sub(C)),
+      dstView.at(C).set({ req_id: req, is_load: 1, deck }),
+      dstView.at(D.add(1)).set({ req_id: req, is_load: 0, deck }),
+      sched_size.at(dst).set(dstSize.add(2)),
+      nextSrc.set(rateTran.call(src)), nextDst.set(rateTran.call(dst)),
+      ifElse(acceptAnneal.call(previousScore, nextSrc.add(nextDst), temperature),
+        [ratings.at(src).set(nextSrc), ratings.at(dst).set(nextDst)],
+        [
+          dstView.move(C, C.add(1), D.sub(C)),
+          dstView.move(D, D.add(2), dstSize.sub(D)),
+          sched_size.at(dst).set(dstSize),
+          srcView.move(B.add(1), B.sub(1), srcSize.sub(B).sub(1)),
+          srcView.move(A.add(1), A, B.sub(A).sub(1)),
+          srcView.at(A).set({ req_id: req, is_load: 1, deck }),
+          srcView.at(B).set({ req_id: req, is_load: 0, deck }),
+          sched_size.at(src).set(srcSize),
+        ],
+      ),
+    ]
+  })
+
+  const tryNudgeStop = func(["i32"], "void", temperature => {
+    const tran = local("i32"), size = local("i32"), offset = local("i32")
+    const from = local("i32"), target = local("i32"), roll = local("i32")
+    const first = local("i32"), end = local("i32"), i = local("i32")
+    const previousScore = local("i32"), nextScore = local("i32")
+    const selected = local(STOP), crossed = local(STOP)
+    return [
+      tran.set(randint.call(planner.NTRANS)), size.set(sched_size.at(tran)),
+      ifElse(size.lt(2), ret()),
+      offset.set(tran.mul(TSIZE)), from.set(randint.call(size)),
+      selected.set(schedule.at(offset.add(from))),
+      roll.set(randint.call(params.nudgeRadius * 2)),
+      target.set(from.add(ifElse(roll.lt(params.nudgeRadius), roll.sub(params.nudgeRadius), roll.sub(params.nudgeRadius - 1)))),
+      ifElse(target.lt(0), target.set(0)),
+      ifElse(target.gt(size.sub(1)), target.set(size.sub(1))),
+      ifElse(target.eq(from), ret()),
+      ifElse(target.lt(from), [first.set(target), end.set(from)], [first.set(from.add(1)), end.set(target.add(1))]),
+      i.set(first),
+      loop(i.lt(end), [
+        crossed.set(schedule.at(offset.add(i))),
+        ifElse(crossed.req_id.eq(selected.req_id), ret()),
+        i.iadd(1),
+      ]),
+      previousScore.set(ratings.at(tran)),
+      ifElse(target.lt(from),
+        schedule.move(offset.add(target.add(1)), offset.add(target), from.sub(target)),
+        schedule.move(offset.add(from), offset.add(from.add(1)), target.sub(from)),
+      ),
+      schedule.at(offset.add(target)).set(selected),
+      nextScore.set(rateTran.call(tran)),
+      ifElse(acceptAnneal.call(previousScore, nextScore, temperature),
+        ratings.at(tran).set(nextScore),
+        [
+          ifElse(target.lt(from),
+            schedule.move(offset.add(target), offset.add(target.add(1)), from.sub(target)),
+            schedule.move(offset.add(from.add(1)), offset.add(from), target.sub(from)),
+          ),
+          schedule.at(offset.add(from)).set(selected),
+        ],
+      ),
+    ]
+  })
+
   const addRequest = func(["i32", "i32", "i32", "i32", "i32"], "void",
     (reqn, start, end, value, deadline) =>
       requests.at(reqn).set({ start, end, value, deadline }),
@@ -266,14 +385,19 @@ export async function annealingWasm(planner: Module): Promise<AnnealingResult> {
   })
 
   const search = func([], "void", () => {
-    const temperature = local("i32")
+    const temperature = local("i32"), move = local("i32")
     return [
       debug("debugger on.", 0),
       forN(TEMP_PHASES, phase => [
-        temperature.set(i32(START_TEMP_CENTS).sub(
-          phase.mul(START_TEMP_CENTS - END_TEMP_CENTS).div(TEMP_PHASES - 1),
+        temperature.set(i32(params.startTemperature).sub(
+          phase.mul(params.startTemperature - END_TEMP_CENTS).div(TEMP_PHASES - 1),
         )),
-        forN(STEPS_PER_PHASE, () => [tryUnassign.call(temperature), tryAssign.call(temperature)]),
+        forN(stepsPerPhase, () => [
+          move.set(randint.call(totalWeight)),
+          ifElse(move.lt(assignEnd), tryAssign.call(temperature),
+            ifElse(move.lt(unassignEnd), tryUnassign.call(temperature),
+              ifElse(move.lt(nudgeEnd), tryNudgeStop.call(temperature), tryRelocate.call(temperature)))),
+        ]),
       ]),
     ]
   })

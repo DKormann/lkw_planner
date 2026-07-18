@@ -1,21 +1,19 @@
-import { button, color, div, p, popup, span, style, table, td, th, tr } from "../view/html";
+import { button, color, div, p, popup, select, span, style, table, td, th, tr } from "../view/html";
 import type { Module } from "../types";
 import { hightLights } from "../view/main";
 import { baselineAnnealing, type AnnealingResult } from "./annealing_baseline";
 import { createImprovedAnnealingSession, improvedAnnealing, type ImprovedAnnealingSession } from "./annealing_improved";
 import { annealingWasm } from "./annealing_wasm";
-import { annealingWasmImproved } from "./annealing_wasm_improved";
 import { AVG_SPEED_KMH, getDeck, getReq, initAnnealingState, isLoad, KM_COST_CENTS, REORG_COST_CENTS, scoreRoute } from "./annealing_shared";
 
 export const availableSolvers = {
+  wasm: annealingWasm,
   baseline: baselineAnnealing,
   improved: improvedAnnealing,
-  wasm: annealingWasm,
-  wasmImproved: annealingWasmImproved,
 } as const;
 type SolverName = keyof typeof availableSolvers;
 
-const INITIAL_SOLVER: SolverName = "wasmImproved";
+const INITIAL_SOLVER: SolverName = "wasm";
 const euros = (cents: number) => `${(cents / 100).toFixed(2)}€`;
 
 class ScoreMismatchError extends Error {}
@@ -120,10 +118,10 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
   const controls = div(style({ display: "flex", gap: ".5em", alignItems: "center", flexWrap: "wrap" }));
   const scoreLine = p();
   const timeLine = p();
-  const solverSelect = document.createElement("select");
-  for (const name of Object.keys(availableSolvers) as SolverName[]) solverSelect.add(new Option(name, name));
-  solverSelect.value = INITIAL_SOLVER;
+  const solverSelect = select(...Object.keys(availableSolvers) as SolverName[]);
   const solverLine = p("solver: ", solverSelect);
+
+
   const detailWrap = div();
   const tableWrap = div(
     style({
@@ -267,8 +265,8 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     let result: AnnealingResult | null = null;
     try {
       if (name === "improved") {
-        annealingSession = createImprovedAnnealingSession(mod, 1_900_000);
-        result = annealingSession.iterateForMs(10);
+        annealingSession = createImprovedAnnealingSession(mod, 150_000);
+        result = annealingSession.iterateForMs(420);
       } else {
         result = await availableSolvers[name](mod);
       }

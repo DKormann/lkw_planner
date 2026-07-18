@@ -153,7 +153,7 @@ export function randomMap (NPOINTS:number, MAPSIZE:number){
   
     let cost = 0;
     for (let i = 0; i < points.length - 1; i++) {
-      cost += CostMatrix[roadIDX(points[i]!, points[i + 1]!)]!;
+      if (points[i] !== points[i + 1]) cost += CostMatrix[roadIDX(points[i]!, points[i + 1]!)]!;
     }
     return cost;
   }
@@ -164,4 +164,3 @@ export function randomMap (NPOINTS:number, MAPSIZE:number){
 
 
 export type RoadMap = typeof randomMap extends (...x:any) => (infer T) ? T : never
-

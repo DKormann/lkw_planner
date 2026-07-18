@@ -1,4 +1,4 @@
-import { annealingWasmImproved, defaultWasmSearchParams, type WasmSearchParams } from "../src/planners/annealing_wasm_improved"
+import { annealingWasm, defaultWasmSearchParams, type WasmSearchParams } from "../src/planners/annealing_wasm"
 import { randomModule } from "../src/types"
 
 const confirm = process.argv.includes("--confirm")
@@ -23,7 +23,7 @@ const results = []
 for (const [name, options] of Object.entries(variants)) {
   const runs = []
   for (const rngSeed of seeds) for (let i = 0; i < cases; i++) {
-    const result = await annealingWasmImproved(modules[i]!, { ...options, rngSeed })
+    const result = await annealingWasm(modules[i]!, { ...options, rngSeed })
     runs.push({ score: result.totalScore / 100, ms: result.elapsedMs })
   }
   results.push({
