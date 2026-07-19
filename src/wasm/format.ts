@@ -1,5 +1,5 @@
 import { analyzeModule, type BuiltFunc } from "./analyze"
-import { asStmts, type AnyArray, type AnyExpr, type AnyFunc, type ModuleDef, type Stmt } from "./ast"
+import { type AnyArray, type AnyExpr, type AnyFunc, type ModuleDef, type Stmt } from "./ast"
 
 const binary: Record<string, string> = {
   add: "+", sub: "-", mul: "*", div: "/", mod: "%", umod: "%u",
@@ -68,24 +68,19 @@ const formatFunction = (
         ...(statement.else.length ? [`${indent}} else {`, ...nested(statement.else)] : []),
         `${indent}}`,
       ]
-      case "block": return [`${indent}block${statement.control}: {`, ...nested(statement.body), `${indent}}`]
       case "loop": return [`${indent}while (${expr(statement.cond)}) {`, ...nested(statement.body), `${indent}}`]
-      case "break": return [`${indent}break${statement.target == null ? "" : ` block${statement.target}`};`]
-      case "continue": return [`${indent}continue${statement.target == null ? "" : ` block${statement.target}`};`]
+      case "for": return [`${indent}for (${locals.get(statement.local)} = ${expr(statement.start)}; ${locals.get(statement.local)} < ${expr(statement.end)}; ${locals.get(statement.local)}++) {`, ...nested(statement.body), `${indent}}`]
       case "return": return [`${indent}return${statement.value ? ` ${expr(statement.value)}` : ""};`]
       case "call.void": return [`${indent}${functions.get(statement.target)}(${statement.args.map(expr).join(", ")});`]
       case "trap": return [`${indent}trap(${JSON.stringify(statement.message)});`]
       case "log": return [`${indent}log(${JSON.stringify(statement.message)}, ${expr(statement.value)});`]
-      case "expr": return [`${indent}${expr(statement.expr)};`]
     }
   })
 
   const result = typeof func.result === "object" ? `struct${func.result.size * 8}` : func.result
   const signature = `${result} ${functions.get(func)}(${func.params.map((type, i) => `${type} p${i}`).join(", ")})`
   const declarations = built.locals.map(([, type], i) => `  ${type} v${i};`)
-  const body = asStmts(built.built)
-  const statements = body ? lines(body) : [`  return ${expr(built.built)};`]
-  return [signature + " {", ...declarations, ...statements, "}"].join("\n")
+  return [signature + " {", ...declarations, ...lines(built.built), "}"].join("\n")
 }
 
 const address = (value: { index: AnyExpr, stride: number, offset: number }, expr: (value: AnyExpr) => string) =>
