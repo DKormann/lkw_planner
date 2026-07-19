@@ -1,1 +1,0 @@
-export const project_name = "plain_wasm"

@@ -174,6 +174,12 @@ export const input:HTMLGenerator<HTMLInputElement> = (...cs)=>{
   return el
 }
 
+export const select:HTMLGenerator<HTMLSelectElement> = (...cs)=>{
+  const el = html("select", ...cs) as HTMLSelectElement
+  cs.filter(c=>typeof c == 'string').forEach(c=>el.options.add(new Option(c as string, c as string)))
+  
+  return el
+}
 
 export const popup = (...cs:HTMLArg[])=>{
   const dialogfield = div({
