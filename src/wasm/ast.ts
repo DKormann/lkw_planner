@@ -118,7 +118,7 @@ type MutableStructMembers<F extends StructFields> = {
 }
 export type StructInit<F extends StructFields> = { [K in keyof F]: ExprLike<FieldValue<F[K]>> }
 export type JSStruct<F extends StructFields> = { [K in keyof F]: Value<FieldValue<F[K]>> }
-export type StructValue<F extends StructFields> = StructMembers<F> & { packed: AnyExpr }
+export type StructValue<F extends StructFields> = StructMembers<F> & { packed: AnyExpr, structType: StructType<F> }
 export type MutableStruct<F extends StructFields> = StructValue<F> & MutableStructMembers<F> & {
   set(value: MutableStruct<F> | StructInit<F>): void
 }
@@ -302,11 +302,11 @@ const packedFieldValue = (backing: StructBacking, field: FieldLayout) => {
 }
 
 const readStruct = <F extends StructFields>(type: StructType<F>, packed: AnyExpr): StructValue<F> =>
-  withoutRecording(() => Object.assign(Object.fromEntries(Object.keys(type.fields).map(name => [name, readField(packed, type.layout[name]!)])), { packed })) as StructValue<F>
+  withoutRecording(() => Object.assign(Object.fromEntries(Object.keys(type.fields).map(name => [name, readField(packed, type.layout[name]!)])), { packed, structType: type })) as StructValue<F>
 
 const structValue = <F extends StructFields>(type: StructType<F>, packed: StructBacking): MutableStruct<F> => {
   const fields = withoutRecording(() => Object.fromEntries(Object.keys(type.fields).map(name => [name, packedFieldValue(packed, type.layout[name]!) ])))
-  return Object.assign(fields, { packed, set: (value: MutableStruct<F> | StructInit<F>) =>
+  return Object.assign(fields, { packed, structType: type, set: (value: MutableStruct<F> | StructInit<F>) =>
     packed.set("packed" in value ? (value as InternalStruct<F>).packed : packStruct(type, value)) }) as InternalStruct<F>
 }
 
@@ -325,7 +325,7 @@ const packStruct = <F extends StructFields>(type: StructType<F>, values: StructI
 }
 
 export const struct = <const F extends StructFields>(fields: F): StructType<F> => {
-  if ("set" in fields || "packed" in fields) throw new Error("Struct fields cannot be named set or packed")
+  if ("set" in fields || "packed" in fields || "structType" in fields) throw new Error("Struct fields cannot be named set, packed, or structType")
   let used = 0
   const layout: Partial<Record<keyof F, FieldLayout>> = {}
   for (const name of Object.keys(fields) as (keyof F)[]) {
@@ -449,11 +449,17 @@ export function variable(initial: number): LocalVar<"i32">
 export function variable(initial: bigint): LocalVar<"i64">
 export function variable<T extends NumType>(initial: Expr<T>): LocalVar<T>
 export function variable<T extends NumType>(initial: ExprLike<T>): LocalVar<T>
+export function variable<F extends StructFields>(initial: StructValue<F>): MutableStruct<F>
 export function variable<F extends StructFields>(type: StructType<F>, initial?: MutableStruct<F> | StructInit<F>): MutableStruct<F>
 export function variable(initialOrType: any, initial?: any): any {
   if (typeof initialOrType === "object" && initialOrType.kind === "struct") {
     const value = local(initialOrType)
     if (initial !== undefined) value.set(initial)
+    return value
+  }
+  if (typeof initialOrType === "object" && initialOrType && "structType" in initialOrType) {
+    const value = local(initialOrType.structType)
+    value.set(initialOrType)
     return value
   }
   const value = local(inferType(initialOrType))

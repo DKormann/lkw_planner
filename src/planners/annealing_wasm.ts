@@ -18,7 +18,7 @@ export type WasmSearchParams = {
 }
 
 export const defaultWasmSearchParams: WasmSearchParams = {
-  steps: 1_600_000, startTemperature: 2_500, nudgeRadius: 4,
+  steps: 1_60_000, startTemperature: 2_500, nudgeRadius: 4,
   assignWeight: 3, unassignWeight: 1, nudgeWeight: 3, relocateWeight: 3,
   rngSeed: 1,
 }
@@ -108,9 +108,9 @@ export async function annealingWasm(planner: Module, options: Partial<WasmSearch
     const deck0 = variable(0), deck1 = variable(0), deckSize0 = variable(0), deckSize1 = variable(0)
 
     for_(0, size, i => {
-      const step = variable(STOP, schedule.at(offset.add(i)))
+      const step = variable(schedule.at(offset.add(i)))
       const req = variable(step.req_id)
-      const request = variable(REQ, requests.at(req))
+      const request = variable(requests.at(req))
       const nextPos = variable(ifElse(step.is_load, request.start, request.end))
       const distance = variable(roadCost.call(pos, nextPos))
       cost.iadd(distance.mul(KM_COST_CENTS))
@@ -191,11 +191,11 @@ export async function annealingWasm(planner: Module, options: Partial<WasmSearch
 
     when(tsize.lt(2), () => return_())
     const toffset = tran.mul(TSIZE)
-    const selected = variable(STOP, schedView.at(randint.call(tsize)))
+    const selected = variable(schedView.at(randint.call(tsize)))
     const req = variable(selected.req_id)
     const deck = variable(selected.deck)
     for_(0, tsize, i => {
-      const step = variable(STOP, schedView.at(i))
+      const step = variable(schedView.at(i))
       when(step.req_id.eq(req), () => when(A.eq(-1), () => A.set(i), () => B.set(i)))
     })
     when(A.eq(-1).or(B.eq(-1)), () => return_())
@@ -236,11 +236,11 @@ export async function annealingWasm(planner: Module, options: Partial<WasmSearch
     when(srcSize.lt(2).or(dstSize.gt(TSIZE - 2)), () => return_())
     const srcOffset = src.mul(TSIZE)
     const dstOffset = dst.mul(TSIZE)
-    const selected = variable(STOP, srcView.at(randint.call(srcSize)))
+    const selected = variable(srcView.at(randint.call(srcSize)))
     const req = variable(selected.req_id)
     const deck = variable(selected.deck)
     for_(0, srcSize, i => {
-      const step = variable(STOP, srcView.at(i))
+      const step = variable(srcView.at(i))
       when(step.req_id.eq(req), () => when(A.eq(-1), () => A.set(i), () => B.set(i)))
     })
     when(A.eq(-1).or(B.eq(-1)), () => return_())
@@ -280,7 +280,7 @@ export async function annealingWasm(planner: Module, options: Partial<WasmSearch
     when(size.lt(2), () => return_())
     const offset = tran.mul(TSIZE)
     const from = randint.call(size)
-    const selected = variable(STOP, schedule.at(offset.add(from)))
+    const selected = variable(schedule.at(offset.add(from)))
     const roll = randint.call(params.nudgeRadius * 2)
     const target = variable(from.add(ifElse(roll.lt(params.nudgeRadius), roll.sub(params.nudgeRadius), roll.sub(params.nudgeRadius - 1))))
     when(target.lt(0), () => target.set(0))
@@ -291,7 +291,7 @@ export async function annealingWasm(planner: Module, options: Partial<WasmSearch
       () => { first.set(from.add(1)); end.set(target.add(1)) },
     )
     for_(first, end, i => {
-      const crossed = variable(STOP, schedule.at(offset.add(i)))
+      const crossed = variable(schedule.at(offset.add(i)))
       when(crossed.req_id.eq(selected.req_id), () => return_())
     })
     const previousScore = variable(ratings.at(tran))

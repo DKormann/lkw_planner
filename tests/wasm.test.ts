@@ -135,7 +135,7 @@ await runTests(
     const sum = fn([], "i32", () => {
       const total = variable(0), i = variable(0)
       while_(() => i.lt(2), () => {
-        const item = variable(Item, items.at(i))
+        const item = variable(items.at(i))
         total.iadd(item.value.add(item.tag))
         i.iadd(1)
       })

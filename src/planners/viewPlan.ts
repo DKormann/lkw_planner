@@ -63,23 +63,22 @@ function checkedResult(mod: Module, result: AnnealingResult) {
 
 export async function plannerView(mod: Module): Promise<HTMLElement> {
   const outerBorder = "1px solid " + color.gray;
-  const innerBorder = "1px solid " + color.lightgray;
   const cellPadding = ".35em .5em";
-  const scheduleCellMinHeight = "2.1em";
 
   let annealer: AnnealingResult | null = null;
   let annealingSession: ImprovedAnnealingSession | null = null;
   let annealingTimer: number | null = null;
   let runId = 0;
 
-  function itemButton(item: number, load?: boolean) {
+  function itemButton(item: number, load?: boolean, deck?: number) {
     const req = mod.requests[item]!;
-    const sp = span(
+    const requestButton = span(
       item.toString().padStart(3, " "),
       style({
         cursor: "pointer",
-        border: "2px solid transparent",
-        borderRadius: ".2em",
+        display: "inline-block",
+        padding: ".15em .35em",
+        color: load === true ? color.blue : load === false ? color.green : color.color,
         whiteSpace: "pre",
         fontFamily: "monospace",
       }),
@@ -104,14 +103,31 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
     if (load === true) points = [points[0]!];
     if (load === false) points = [points[1]!];
 
-    sp.onmouseenter = () => {
-      sp.style.borderColor = color.green;
+    const result = deck === undefined
+      ? span(requestButton, style({ border: outerBorder, borderRadius: ".25em", background: color.lightgray }))
+      : div(
+          [0, 1].map(deckIndex => div(
+            deckIndex === deck ? requestButton : "\u00a0",
+            style({
+              boxSizing: "border-box",
+              minWidth: "3.1em",
+              minHeight: "1.55em",
+              textAlign: "center",
+              borderTop: deckIndex === 1 ? outerBorder : "none",
+            }),
+          )),
+          style({ border: outerBorder, borderRadius: ".2em", overflow: "hidden" }),
+        );
+
+    result.onmouseenter = () => {
+      result.style.outline = `2px solid ${color.green}`;
       hightLights.set([{ points }]);
     };
-    sp.onmouseleave = () => {
-      sp.style.borderColor = "transparent";
+    result.onmouseleave = () => {
+      result.style.outline = "none";
+      hightLights.set([]);
     };
-    return sp;
+    return result;
   }
 
   const cell: typeof td = (...x) => td(style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" }), ...x);
@@ -148,15 +164,16 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
       style({
         borderCollapse: "collapse",
         width: "100%",
+        tableLayout: "fixed",
       }),
       tr(
-        th("transporter", style({ border: outerBorder, padding: cellPadding, textAlign: "left" })),
-        th("value", style({ border: outerBorder, padding: cellPadding, textAlign: "left" })),
+        th("transporter", style({ border: outerBorder, padding: cellPadding, textAlign: "left", width: "8em" })),
+        th("value", style({ border: outerBorder, padding: cellPadding, textAlign: "right", width: "7em" })),
         th("steps", style({ border: outerBorder, padding: cellPadding, textAlign: "left" })),
       ),
       mod.startpositions.map((start, tran) =>
         tr(
-          td(
+          cell(
             tran,
             style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" }),
             function () {
@@ -184,37 +201,22 @@ export async function plannerView(mod: Module): Promise<HTMLElement> {
               },
             },
           ),
-          td(euros(annealer?.scheduleRatings[tran] ?? 0), style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" })),
+          td(euros(annealer?.scheduleRatings[tran] ?? 0), style({ border: outerBorder, padding: cellPadding, textAlign: "right", verticalAlign: "top" })),
           td(
-            table(
-              style({
-                borderCollapse: "collapse",
+            div(
+              Array.from({ length: annealer?.scheduleSizes[tran]! ?? 0 }, (_, i) => {
+                const step = annealer!.schedule[tran * annealer!.TSIZE + i]!
+                return itemButton(getReq(step), !!isLoad(step), getDeck(step))
               }),
-              [0, 1].map((deck) =>
-                tr(
-                  Array.from({ length: annealer!.scheduleSizes[tran]! }, (_, i) => {
-                    const step = annealer?.schedule[tran * annealer.TSIZE + i]!;
-                    const load = isLoad(step);
-                    return td(
-                      getDeck(step) === deck ? itemButton(getReq(step), !!load) : "",
-                      style({
-                        color: load ? color.blue : color.green,
-                        border: innerBorder,
-                        padding: ".2em .3em",
-                        minWidth: "2.6em",
-                        height: scheduleCellMinHeight,
-                        boxSizing: "border-box",
-                      }),
-                    );
-                  }),
-                ),
-              ),
+              style({
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "flex-start",
+                gap: ".3em",
+                minHeight: "3.1em",
+              })
             ),
-            style({
-              border: outerBorder,
-              padding: ".25em",
-              verticalAlign: "top",
-            }),
+            style({ border: outerBorder, padding: cellPadding, verticalAlign: "top" }),
           ),
         ),
       ),
